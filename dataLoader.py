@@ -26,13 +26,13 @@ class DataLoader:
             'ID': self.objects[pairNo][objNo],
             'light_fixed': isLightFixed,
             'random_cam': isRandomCam,
-            'cam_x': params.cam_x,
-            'cam_y': params.cam_y,
-            'cam_z': params.cam_z,
-            'cam_qw': params.cam_qw,
-            'cam_qx': params.cam_qx,
-            'cam_qy': params.cam_qy,
-            'cam_qz': params.cam_qz
+            'cam_x': params["cam_x"],
+            'cam_y': params["cam_y"],
+            'cam_z': params["cam_z"],
+            'cam_qw': params["cam_qw"],
+            'cam_qx': params["cam_qx"],
+            'cam_qy': params["cam_qy"],
+            'cam_qz': params["cam_qz"]
         }
 
         json_params = dumps(parameter, indent=2)

@@ -4,10 +4,13 @@ from json import dumps
 from PIL import Image
 import cv2
 import numpy as np
+import time
 
+print("making connection")
 # Create Connection
+#ws = create_connection("wss://230t.eecs.yorku.ca:8044/api/")
 ws = create_connection("wss://polyhedral.eecs.yorku.ca/api/")
-
+print("connected")
 # Set Parameters
 parameter = {
     'ID':'b04b67e3-9c5c-4468-9241-56288d6509ed',
@@ -27,13 +30,18 @@ json_params = dumps(parameter, indent=2)
 ws.send(json_params)
 
 # Wait patiently while checking status
+timeout = 0
+start = time.time();
 while True:
+    timeout = time.time()
     result = json.loads(ws.recv())
     print("Job Status: {0}".format(result['status']))
     if result['status'] == "SUCCESS":
         break
     elif "FAILURE" in result['status'] or "INVALID" in result['status']:
         sys.exit()
+
+    print("Elapsed: " + str(timeout - start))
 
 # Processing result
 image_base64 = result['image']

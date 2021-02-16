@@ -8,7 +8,15 @@ if __name__ == "__main__":
 		exit(0)
 	file = str(sys.argv[1])
 	DL = DataLoader(file)
-	params = {"cam_x":1, "cam_y":1, "cam_z":1, "cam_qw":1, "cam_qx":1, "cam_qy":1, "cam_qz":1}
-	view = DL.getView(0,0,params)
+	params = {
+		'cam_x': -0.911,
+		'cam_y': 1.238,
+		'cam_z': -4.1961,
+		'cam_qw': -0.0544,
+		'cam_qx': -0.307,
+		'cam_qy': 0.9355,
+		'cam_qz': 0.16599
+	}
+	view = DL.getView(0, 0, params, isRandomCam="true")
 	cv2.imshow("view", view)
-	cv2.waitKey("0")
+	cv2.waitKey(0)
