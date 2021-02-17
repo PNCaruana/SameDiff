@@ -14,7 +14,6 @@ class DataLoader:
             reader = csv.reader(csvfile, delimiter=',')
             for row in reader:
                 self.objects.append(row)
-        print(self.objects)
 
 
     # returns cv2 image array
