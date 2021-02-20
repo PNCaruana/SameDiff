@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 from numpy import cos
 from numpy import sin
-import quaternion
+from numpy import pi
 from scipy.spatial.transform import Rotation as R
 
 
@@ -98,9 +98,15 @@ if __name__ == "__main__":
 	DL = DataLoader(file)
 
 	robot1 = Robot(DL, 0, 0)
+	robot2 = Robot(DL, 0, 1)
 
-	for i in range(0, 20):
-		robot1.setCam(5, i * (np.pi/10), np.pi/2)
+	robot1.setCam(5,0,0)
+	robot1.processCameraView()
+	for i in range(1,5):
+		robot1.setCam(5, 0, i*pi/2/4)
+		robot1.processCameraView()
+	for i in range(1,5):
+		robot1.setCam(5, i*pi/2/4, pi/2)
 		robot1.processCameraView()
 
 # params = {
