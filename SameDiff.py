@@ -39,7 +39,7 @@ class Camera:
 class Robot:
 
 	# <int> objNo, either 0 or 1 corresponding to which index key the robot is working with
-	def __init__(self, dataLoader, pairNo, objNo):
+	def __init__(self, dataLoader, pairNo, objNo, debug=False):
 		self.cam = Camera()
 		self.objNo = objNo
 		self.pairNo = pairNo
@@ -47,15 +47,21 @@ class Robot:
 		self.viewCount = 0
 		self.cameraPos = {'r': 5, 'phi': 0, 'theta': 0}  # position of camera in spherical coordinates
 		self.offset = [0,0,0]
+		self.debugMode = debug
 
 	# gets the view based on where the camera currently is
-	def processCameraView(self):
+	def processCameraView(self, r, phi, theta):
+
+		self.setCam(r,phi,theta)
+
 		print("Acquiring new view...")
 		self.cam.view = self.DL.getView(self.pairNo, self.objNo, self.cam.getParams())
 		fileName = os.getcwd() + "/views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_view" + str(
 			self.viewCount) + ".jpg"
 		cv2.imwrite(fileName, self.cam.view)
-		print("Saved view: " + fileName)
+
+		if self.debugMode:
+			print("Saved view: " + fileName)
 
 		self.viewCount += 1
 
@@ -93,22 +99,25 @@ class Robot:
 
 
 	def centerObject(self, debug=False):
-		self.setCam(4, 0, 0) # looking straight down
+		print("Stereoscopically centering object...")
+		print("  >obtaining view 1")
 		if not debug:
-			self.processCameraView()
+			self.processCameraView(4, 0, 0)
 		else:
 			self.cam.view = cv2.imread("views/robot0_0_view0.jpg", 0) #for debug
+			self.setCam(4,0,0)
 			self.viewCount = 1
 
 		#get distance
 		C1 = self.getCentroid()
 		self.offset[0] = 0.1
-		self.setCam(4, 0, 0)
 
+		print("  >obtaining view 2 (offset 0.1)")
 		if not debug:
-			self.processCameraView()
+			self.processCameraView(4,0,0)
 		else:
 			self.cam.view = cv2.imread("views/robot0_0_view1.jpg", 0)  # for debug
+			self.setCam(4,0,0)
 			self.viewCount = 2
 
 		C2 = self.getCentroid()
@@ -117,8 +126,6 @@ class Robot:
 		f = 3500 #35 mm
 		b = 0.1
 		Z = (b*f)/(np.abs(C1[0] - C2[0])) #distance in pixels of center along x-axis
-		print("Distance to camera is: " + str(Z))
-		print("Centroid_0:" + str(C1))
 
 		dp = (960 - C1[0]) # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
 		dx = Z*dp/f #actual distance
@@ -126,23 +133,26 @@ class Robot:
 		dp = (540 - C1[1])
 		dy = Z*dp/f
 
-		print("x-distance: " + str(dx))
-		print("y-distance: " + str(dy))
+		print("  >calculated distance to camera is: " + str(Z))
+
 		self.offset[0] = dx #move camera so that centroid is centered
 		self.offset[1] = dy
-		self.setCam(4,0,0)
 
 		if not debug:
-			self.processCameraView()
+			self.processCameraView(4,0,0)
 		else:
 			self.cam.view = cv2.imread("views/robot0_0_view2.jpg", 0)  # for debug
+			self.setCam(4,0,0)
 			self.viewCount = 3
 
 		CF = self.getCentroid()
-		print("Sanity Check: " + str(CF))
 
+		#now center depth (Z-axis)
+		dz = 4 - Z #camera z-pos minus depth
+		self.offset[2] = dz
 
-
+		print("  >final object centroid at " + str((dx,dy,dz)))
+		print("Object Centered")
 
 
 	#orients the camera in spherical coordinates around the camera focus point (default is 0)
@@ -165,7 +175,9 @@ class Robot:
 
 		Orientation = R.from_matrix(rotMatrix(theta, phi, 0)).as_quat()
 		self.cam.q = Orientation
-		print("Camera oriented to", self.cam.getParams())
+
+		if self.debugMode:
+			print("Camera oriented to", self.cam.getParams())
 
 	def __str__(self):
 		pass
@@ -182,6 +194,13 @@ if __name__ == "__main__":
 	robot2 = Robot(DL, 0, 1)
 
 	robot1.centerObject(debug = True)
+
+	for i in range(0,11):
+		robot1.processCameraView(6, (i/10)*pi/2, 0)
+	for i in range(1,11):
+		robot1.processCameraView(6, pi/2, (i/10)*pi/2)
+
+
 
 # params = {
 #		'cam_x': -0.911,
