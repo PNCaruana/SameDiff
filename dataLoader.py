@@ -55,7 +55,7 @@ class DataLoader:
         # create cv2 image
 
         image = Image.open(io.BytesIO(image_decoded))
-        cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_BGR2RGB)
+        cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY)
 
         ws.close()
 

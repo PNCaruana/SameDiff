@@ -46,6 +46,7 @@ class Robot:
 		self.DL = dataLoader
 		self.viewCount = 0
 		self.cameraPos = {'r': 5, 'phi': 0, 'theta': 0}  # position of camera in spherical coordinates
+		self.offset = [0,0,0]
 
 	# gets the view based on where the camera currently is
 	def processCameraView(self):
@@ -62,18 +63,98 @@ class Robot:
 		cv2.imshow("view", self.cam.view)
 		cv2.waitKey(0)
 
+	def showImg(self, img):
+		cv2.imshow('img', img)
+		cv2.waitKey(0)
+
+	def getCentroid(self):
+		#get contours of view
+		ret, thresh = cv2.threshold(self.cam.view, 127, 255, 0)
+		contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+		cv2.drawContours(self.cam.view, contours, -1, (0,255,0), 3)
+
+
+		#find centroid
+		for c in contours:
+			M = cv2.moments(c)
+
+			# calculate x,y coordinate of center
+			cX = int(M["m10"] / M["m00"])
+			cY = int(M["m01"] / M["m00"])
+
+			cv2.circle(self.cam.view, (cX, cY), 5, (0, 255, 0), -1)
+
+		if not contours:
+			print("ERROR -> No object in view")
+			return -1
+		else:
+			cv2.imwrite("views/contours_"+str(self.viewCount - 1)+".jpg", self.cam.view)
+			return (cX, cY)
+
+
+	def centerObject(self, debug=False):
+		self.setCam(4, 0, 0) # looking straight down
+		if not debug:
+			self.processCameraView()
+		else:
+			self.cam.view = cv2.imread("views/robot0_0_view0.jpg", 0) #for debug
+			self.viewCount = 1
+
+		#get distance
+		C1 = self.getCentroid()
+		self.offset[0] = 0.1
+		self.setCam(4, 0, 0)
+
+		if not debug:
+			self.processCameraView()
+		else:
+			self.cam.view = cv2.imread("views/robot0_0_view1.jpg", 0)  # for debug
+			self.viewCount = 2
+
+		C2 = self.getCentroid()
+
+		#stereo-distance:
+		f = 3500 #35 mm
+		b = 0.1
+		Z = (b*f)/(np.abs(C1[0] - C2[0])) #distance in pixels of center along x-axis
+		print("Distance to camera is: " + str(Z))
+		print("Centroid_0:" + str(C1))
+
+		dp = (960 - C1[0]) # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
+		dx = Z*dp/f #actual distance
+
+		dp = (540 - C1[1])
+		dy = Z*dp/f
+
+		print("x-distance: " + str(dx))
+		print("y-distance: " + str(dy))
+		self.offset[0] = dx #move camera so that centroid is centered
+		self.offset[1] = dy
+		self.setCam(4,0,0)
+
+		if not debug:
+			self.processCameraView()
+		else:
+			self.cam.view = cv2.imread("views/robot0_0_view2.jpg", 0)  # for debug
+			self.viewCount = 3
+
+		CF = self.getCentroid()
+		print("Sanity Check: " + str(CF))
+
+
+
+
+
 	#orients the camera in spherical coordinates around the camera focus point (default is 0)
 	def setCam(self, r, phi, theta):
 		# position the camera
-		self.cam.cam_x = r * np.cos(theta) * np.sin(phi)
-		self.cam.cam_y = r * np.sin(theta) * np.sin(phi)
-		self.cam.cam_z = r * np.cos(phi)
+		self.cam.cam_x = r * np.cos(theta) * np.sin(phi) + self.offset[0]
+		self.cam.cam_y = r * np.sin(theta) * np.sin(phi) + self.offset[1]
+		self.cam.cam_z = r * np.cos(phi) + self.offset[2]
 
 		self.cameraPos["r"] = r
 		self.cameraPos["theta"] = theta
 		self.cameraPos["phi"] = phi
-
-
 
 		# set orientation to look at target
 
@@ -100,14 +181,7 @@ if __name__ == "__main__":
 	robot1 = Robot(DL, 0, 0)
 	robot2 = Robot(DL, 0, 1)
 
-	robot1.setCam(5,0,0)
-	robot1.processCameraView()
-	for i in range(1,5):
-		robot1.setCam(5, 0, i*pi/2/4)
-		robot1.processCameraView()
-	for i in range(1,5):
-		robot1.setCam(5, i*pi/2/4, pi/2)
-		robot1.processCameraView()
+	robot1.centerObject(debug = True)
 
 # params = {
 #		'cam_x': -0.911,
