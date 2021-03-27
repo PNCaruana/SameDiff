@@ -87,14 +87,15 @@ class Robot:
         self.pairNo = pairNo
         self.DL = dataLoader
         self.viewCount = 0
-        self.cameraPos = {'r': 5, 'phi': 0, 'theta': 0}  # position of camera in spherical coordinates
+        self.cameraPos = {'r': 4, 'phi': pi/2, 'theta': 0}  # position of camera in spherical coordinates
+        self.defaultCam = {'r': 4, 'phi': pi/2, 'theta': 0}
+        self.moveSpeed = pi/8
         self.offset = [0, 0, 0]
         self.debugMode = debug
 
-    # gets the view based on where the camera currently is
-    def processCameraView(self, r, phi, theta, debug=False):
 
-        self.setCam(r, phi, theta)
+    # gets the view based on where the camera currently is
+    def processCameraView(self, debug=False):
 
         if not debug:
 
@@ -117,6 +118,7 @@ class Robot:
         cv2.imshow('img', img)
         cv2.waitKey(0)
 
+    # gets centroid of image blob
     def getCentroid(self):
         # get contours of view
         ret, thresh = cv2.threshold(self.cam.view, 127, 255, 0)
@@ -140,11 +142,13 @@ class Robot:
             cv2.imwrite("views/contours_" + str(self.viewCount - 1) + ".jpg", self.cam.view)
             return (cX, cY)
 
+    # centers object in world coordinates
     def centerObject(self, debug=False):
         print("Stereoscopically centering object...")
-        print("  >obtaining view 1")
+        print("  >Getting first view")
         if not debug:
-            self.processCameraView(4, 0, 0)
+            self.setCam(4, 0, 0)
+            self.processCameraView()
         else:
             self.cam.view = cv2.imread("views/robot0_0_view0.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
@@ -154,9 +158,10 @@ class Robot:
         C1 = self.getCentroid()
         self.offset[1] = 0.2
 
-        print("  >obtaining view 2 (offset 0.2)")
+        print("  >Getting second view from different position (offset 0.2)")
         if not debug:
-            self.processCameraView(4, 0, 0)
+            self.setCam(4, 0, 0)
+            self.processCameraView()
         else:
             self.cam.view = cv2.imread("views/robot0_0_view1.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
@@ -165,7 +170,7 @@ class Robot:
         C2 = self.getCentroid()
 
         # stereo-distance:
-        f = 3500  # 35 mm
+        f = 2110  # apparent focus wtf
         b = 0.2
         Z = (b * f) / (np.abs(C1[0] - C2[0]))  # distance in pixels of center along x-axis
 
@@ -175,12 +180,13 @@ class Robot:
         dp = (540 - C1[1])
         dx = Z * dp / f
         dz = 4 - Z  # camera z-pos minus depth
-        print("  >calculated distance to camera is: " + str(Z))
+        print("  >calculated distance to camera is: " + str(round(Z, 4)))
 
         self.offset[0:3] = np.round([dx, dy, dz], 8)
 
         if not debug:
-            self.processCameraView(4, 0, 0)
+            self.setCam(4, 0, 0)
+            self.processCameraView()
         else:
             self.cam.view = cv2.imread("views/robot0_0_view2.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
@@ -188,11 +194,56 @@ class Robot:
 
         CF = self.getCentroid()
 
-
-
         print("  >final object centroid at " + str((dx, dy, dz)))
         print("Object Centered")
 
+        self.cameraPos = self.defaultCam
+
+    # interface functions ==========================================
+
+    # moves camera in directions specified by fn name
+    def move_down(self):
+        newPhi = self.cameraPos["phi"] - self.moveSpeed
+        if 0 <= newPhi:
+            self.cameraPos["phi"] = newPhi
+            print("moved DOWN to " + str(self.cameraPos))
+
+            if round(newPhi, 8) == 0:
+                newPhi = 0.00001 # dont want it exactly at singularity
+                self.cameraPos["phi"] = newPhi
+
+        else:
+            print("Cannot move UP, already at maximum")
+        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
+
+    def move_up(self):
+        newPhi = self.cameraPos["phi"] + self.moveSpeed
+        if newPhi <= pi:
+            self.cameraPos["phi"] = newPhi
+            print("moved UP to " + str(self.cameraPos)) # tell the folks at home
+
+            if round(newPhi, 8) == pi:
+                newPhi = pi - 0.00001 # dont want it exactly at singularity
+                self.cameraPos["phi"] = newPhi
+        else:
+            print("Cannot move DOWN, already at minimum")
+        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
+
+    def move_left(self):
+        newTheta = self.cameraPos["theta"] - self.moveSpeed
+        self.cameraPos["theta"] = newTheta % (2*pi)
+        print("moved LEFT to " + str(self.cameraPos))
+        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
+
+    def move_right(self):
+        newTheta = self.cameraPos["theta"] + self.moveSpeed
+        self.cameraPos["theta"] = newTheta % (2*pi)
+        print("moved RIGHT to " + str(self.cameraPos))
+        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
+
+    def set_radius(self, r):
+        self.cameraPos["r"] = r
+        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
     # orients the camera in spherical coordinates around the camera focus point (default is 0)
     def setCam(self, r, phi, theta):
         # position the camera
@@ -238,20 +289,16 @@ if __name__ == "__main__":
     file = str(sys.argv[1])
     DL = DataLoader(file)
 
-    robot1 = Robot(DL, 0, 0, debug=True)
-    robot2 = Robot(DL, 0, 1)
+    robot1 = Robot(DL, 1, 0, debug=False)
+    robot2 = Robot(DL, 1, 1)
 
-    robot1.centerObject(debug=True)
+    robot1.centerObject(debug=False)
 
-    robot1.processCameraView(4, 0, 0, debug=True)
-    N=4
-    for i in range(0,N+1):
-        robot1.processCameraView(4, (i/N)*pi/2, 0, debug=True)
+    robot1.set_radius(1.5)
 
-    for i in range(0,N+1):
-        robot1.processCameraView(4, pi/2, (i/N)*2*pi, debug=True)
-    for i in range(0, N + 1):
-        robot1.processCameraView(4, pi/2 + (i/N)*pi/2, 2*pi, debug=True)
+    for i in range (0, 6):
+        robot1.move_left()
+        robot1.processCameraView()
 
 # params = {
 #		'cam_x': -0.911,
