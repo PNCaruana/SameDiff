@@ -58,7 +58,7 @@ class Camera:
 
     #target is Vector3 <x,y,z>
     def lookAt(self, target):
-        up = np.array([0.00000000000001, 0, 1]) # slightly peturbed to avoid singularity
+        up = np.array([0.00000000000000001, 0, 1]) # slightly peturbed to avoid singularity
         pos = np.array([self.cam_x, self.cam_y, self.cam_z])
         target = np.array(target)
 
@@ -152,7 +152,7 @@ class Robot:
 
         # get distance
         C1 = self.getCentroid()
-        self.offset[0] = 0.2
+        self.offset[1] = 0.2
 
         print("  >obtaining view 2 (offset 0.2)")
         if not debug:
@@ -170,15 +170,14 @@ class Robot:
         Z = (b * f) / (np.abs(C1[0] - C2[0]))  # distance in pixels of center along x-axis
 
         dp = (960 - C1[0])  # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
-        dx = Z * dp / f  # actual distance
+        dy = Z * dp / f  # actual distance
 
         dp = (540 - C1[1])
-        dy = Z * dp / f
-
+        dx = Z * dp / f
+        dz = 4 - Z  # camera z-pos minus depth
         print("  >calculated distance to camera is: " + str(Z))
 
-        self.offset[0] = dx  # move camera so that centroid is centered
-        self.offset[1] = dy
+        self.offset[0:3] = np.round([dx, dy, dz], 8)
 
         if not debug:
             self.processCameraView(4, 0, 0)
@@ -189,9 +188,7 @@ class Robot:
 
         CF = self.getCentroid()
 
-        # now center depth (Z-axis)
-        dz = 4 - Z  # camera z-pos minus depth
-        self.offset[2] = dz
+
 
         print("  >final object centroid at " + str((dx, dy, dz)))
         print("Object Centered")
@@ -213,9 +210,6 @@ class Robot:
         phiHat = np.round([np.cos(theta) * np.cos(phi), np.sin(theta) * np.cos(phi), -np.sin(phi)],8)
         thetaHat = np.round([-np.sin(theta), np.cos(theta), 0],8)
         rHat = np.round([np.cos(theta) * np.sin(phi), np.sin(theta) * np.sin(phi), np.cos(phi)],8)
-
-
-
 
         # point to the center of the view sphere
         self.cam.lookAt(self.offset)
@@ -247,17 +241,17 @@ if __name__ == "__main__":
     robot1 = Robot(DL, 0, 0, debug=True)
     robot2 = Robot(DL, 0, 1)
 
-    # robot1.centerObject(debug=True)
+    robot1.centerObject(debug=True)
 
     robot1.processCameraView(4, 0, 0, debug=True)
-    N=10
+    N=4
     for i in range(0,N+1):
         robot1.processCameraView(4, (i/N)*pi/2, 0, debug=True)
 
     for i in range(0,N+1):
         robot1.processCameraView(4, pi/2, (i/N)*2*pi, debug=True)
-
-    robot1.processCameraView(4, (4/4)*pi, pi/2, debug=True)
+    for i in range(0, N + 1):
+        robot1.processCameraView(4, pi/2 + (i/N)*pi/2, 2*pi, debug=True)
 
 # params = {
 #		'cam_x': -0.911,
