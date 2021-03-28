@@ -99,7 +99,7 @@ class Robot:
 
         if not debug:
 
-            print("Acquiring new view...")
+            print("Acquiring new view from web-api...")
             self.cam.view = self.DL.getView(self.pairNo, self.objNo, self.cam.getParams())
             fileName = os.getcwd() + "/views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_view" + str(
                 self.viewCount) + ".jpg"
@@ -150,7 +150,7 @@ class Robot:
             self.setCam(4, 0, 0)
             self.processCameraView()
         else:
-            self.cam.view = cv2.imread("views/robot0_0_view0.jpg", 0)  # for debug
+            self.cam.view = cv2.imread("views/robot0_1_view0.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
             self.viewCount = 1
 
@@ -163,7 +163,7 @@ class Robot:
             self.setCam(4, 0, 0)
             self.processCameraView()
         else:
-            self.cam.view = cv2.imread("views/robot0_0_view1.jpg", 0)  # for debug
+            self.cam.view = cv2.imread("views/robot0_1_view1.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
             self.viewCount = 2
 
@@ -188,7 +188,7 @@ class Robot:
             self.setCam(4, 0, 0)
             self.processCameraView()
         else:
-            self.cam.view = cv2.imread("views/robot0_0_view2.jpg", 0)  # for debug
+            self.cam.view = cv2.imread("views/robot0_1_view2.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
             self.viewCount = 3
 
@@ -244,6 +244,7 @@ class Robot:
     def set_radius(self, r):
         self.cameraPos["r"] = r
         self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
+
     # orients the camera in spherical coordinates around the camera focus point (default is 0)
     def setCam(self, r, phi, theta):
         # position the camera
@@ -274,6 +275,15 @@ class Robot:
             f.write(self.cam.printParams())
             f.close()
 
+    def enhanceView(self):
+        #squaring to maxize face contrast
+
+        self.cam.view = self.cam.view ** 2
+        self.cam.vew = self.cam.view // np.max(self.cam.view)
+        edges = cv2.Canny(self.cam.view, 50, 255)
+        self.displayView()
+        self.showImg(edges)
+
     def __str__(self):
         pass
 
@@ -292,13 +302,12 @@ if __name__ == "__main__":
     robot1 = Robot(DL, 1, 0, debug=False)
     robot2 = Robot(DL, 1, 1)
 
-    robot1.centerObject(debug=False)
+    robot1.centerObject(debug=True)
 
     robot1.set_radius(1.5)
 
-    for i in range (0, 6):
-        robot1.move_left()
-        robot1.processCameraView()
+    robot1.processCameraView()
+    robot1.enhanceView()
 
 # params = {
 #		'cam_x': -0.911,
