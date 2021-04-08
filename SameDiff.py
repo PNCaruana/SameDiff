@@ -34,6 +34,10 @@ def orientation(right, up, forward):
          [right[2], up[2], forward[2]]]
     return M
 
+def dist_2d(A, B):
+    AB = [B[0] - A[0], B[1] - A[1]]
+    return round(np.sqrt(AB[0]**2 + AB[1]**2), 8)
+
 class Camera:
     def __init__(self):
         self.q = R.from_quat([0, 0, sin(np.pi / 4), -sin(np.pi / 4)]).as_quat()
@@ -102,7 +106,7 @@ class Robot:
             print("Acquiring new view from web-api...")
             self.cam.view = self.DL.getView(self.pairNo, self.objNo, self.cam.getParams())
             fileName = os.getcwd() + "/views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_view" + str(
-                self.viewCount) + ".jpg"
+                self.viewCount) + ".png"
             cv2.imwrite(fileName, self.cam.view)
 
             if self.debugMode:
@@ -139,39 +143,13 @@ class Robot:
             print("ERROR -> No object in view")
             return -1
         else:
-            cv2.imwrite("views/contours_" + str(self.viewCount - 1) + ".jpg", self.cam.view)
+            cv2.imwrite("views/Centering_"+ str(self.pairNo) + "_" + str(self.objNo) + "_" + str(self.viewCount - 1) + ".jpg", self.cam.view)
             return (cX, cY)
 
-    # centers object in world coordinates
-    def centerObject(self, debug=False):
-        print("Stereoscopically centering object...")
-        print("  >Getting first view")
-        if not debug:
-            self.setCam(4, 0, 0)
-            self.processCameraView()
-        else:
-            self.cam.view = cv2.imread("views/robot0_1_view0.jpg", 0)  # for debug
-            self.setCam(4, 0, 0)
-            self.viewCount = 1
-
-        # get distance
-        C1 = self.getCentroid()
-        self.offset[1] = 0.2
-
-        print("  >Getting second view from different position (offset 0.2)")
-        if not debug:
-            self.setCam(4, 0, 0)
-            self.processCameraView()
-        else:
-            self.cam.view = cv2.imread("views/robot0_1_view1.jpg", 0)  # for debug
-            self.setCam(4, 0, 0)
-            self.viewCount = 2
-
-        C2 = self.getCentroid()
-
+    #Calculates the 3D position based on a binocular shift b
+    def calculate_pos(self, C1, C2, b):
         # stereo-distance:
         f = 2110  # apparent focus wtf
-        b = 0.2
         Z = (b * f) / (np.abs(C1[0] - C2[0]))  # distance in pixels of center along x-axis
 
         dp = (960 - C1[0])  # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
@@ -180,30 +158,183 @@ class Robot:
         dp = (540 - C1[1])
         dx = Z * dp / f
         dz = 4 - Z  # camera z-pos minus depth
-        print("  >calculated distance to camera is: " + str(round(Z, 4)))
 
-        self.offset[0:3] = np.round([dx, dy, dz], 8)
+        print("  >calculated distance to camera is: " + str(round(Z, 4)))
+        print("  >Point is at " + str((dx, dy, dz)))
+        return np.round([dx, dy, dz], 8)
+
+    # centers object in world coordinates
+    def centerObject(self, debug=False):
+        print("Stereoscopically centering object...")
+        print("  >Getting first view")
+
+        b = 0.2
+        if not debug:
+            self.setCam(4, 0, 0)
+            self.processCameraView()
+        else:
+            self.cam.view = cv2.imread("views/robot"+str(self.objNo)+"_1_view0.jpg", 0)  # for debug
+            self.setCam(4, 0, 0)
+            self.viewCount = 1
+
+        # get distance
+        C1 = self.getCentroid()
+        self.offset[1] = b
+
+        print("  >Getting second view from different position (offset 0.2)")
+        if not debug:
+            self.setCam(4, 0, 0)
+            self.processCameraView()
+        else:
+            self.cam.view = cv2.imread("views/robot"+str(self.objNo)+"_1_view1.jpg", 0)  # for debug
+            self.setCam(4, 0, 0)
+            self.viewCount = 2
+
+        C2 = self.getCentroid()
+
+        self.offset[0:3] = self.calculate_pos(C1, C2, b)
 
         if not debug:
             self.setCam(4, 0, 0)
             self.processCameraView()
         else:
-            self.cam.view = cv2.imread("views/robot0_1_view2.jpg", 0)  # for debug
+            self.cam.view = cv2.imread("views/robot"+str(self.objNo)+"_1_view2.jpg", 0)  # for debug
             self.setCam(4, 0, 0)
             self.viewCount = 3
 
         CF = self.getCentroid()
 
-        print("  >final object centroid at " + str((dx, dy, dz)))
         print("Object Centered")
 
         self.cameraPos = self.defaultCam
 
+    def enhanceView(self):
+        #squaring to maxize face contrast
+        print("Enhancing View Image")
+        self.getROI()
+        self.cam.view = self.cam.view ** 2
+        self.cam.vew = self.cam.view // np.max(self.cam.view)
+
+        #return edges
+
+    def findVertices(self):
+        #ret, thresh = cv2.threshold(self.cam.view, 127, 255, 0)
+        #self.cam.view = cv2.Canny(self.cam.view, 50, 255)
+        #self.cam.view = cv2.dilate(self.cam.view, kernel=np.ones((3,3), np.float32))
+        self.cam.view = cv2.medianBlur(self.cam.view, 7)
+
+
+        img = cv2.cvtColor(np.zeros_like(self.cam.view), cv2.COLOR_GRAY2RGB)
+        verts = np.zeros_like(self.cam.view)
+
+        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.02)
+        dst = cv2.dilate(dst, None)
+        verts[dst > 0.01*dst.max()] = 50
+
+        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.03)
+        dst = cv2.dilate(dst, None)
+        verts[dst > 0.01 * dst.max()] += 50
+
+        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.04)
+        dst = cv2.dilate(dst, None)
+        verts[dst > 0.01 * dst.max()] += 50
+
+        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.05)
+        dst = cv2.dilate(dst, None)
+        verts[dst > 0.01 * dst.max()] += 50
+
+        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.07)
+        dst = cv2.dilate(dst, None)
+        verts[dst > 0.01 * dst.max()] = 50
+
+        verts[verts >= 150] = 255
+        verts[verts != 255] = 0
+
+        #self.showImg(verts)
+        clusters = self.getClusters(verts)
+        vertices = self.calcVertices(clusters)
+        for V in vertices:
+            cv2.circle(img, tuple(V), 5, (0, 255, 0), -1)
+        self.showImg(img)
+        #contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        #self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
+        cv2.imwrite("views/edges.png", self.cam.view)
+
+    def getClusters(self, verts):
+        pts = []
+        maxDist = 50 #maximum number of pixels away for something to be considered part of the cluster
+        tempImg = cv2.cvtColor(np.zeros_like(self.cam.view), cv2.COLOR_GRAY2RGB)
+
+        #put get all high probability points
+        for x in range(0, len(verts)):
+            for y in range(0, len(verts[0])):
+                if verts[x,y] == 255:
+                    pts.append([x,y])
+
+        clusters = [] #init
+        print("Clustering " + str(len(pts)) + " points")
+        while pts:
+            pt = pts.pop(0)
+
+            #check clusters first, see if it belongs in any cluster
+            next = False
+            for C in clusters:
+                for cp in C:
+                    if dist_2d(pt, cp) <= maxDist:
+                        C.append(pt)
+                        next = True
+                        break;
+                if next:
+                    break
+            #if we added to  cluster, dont do anything more with this pt
+            if next:
+                continue
+
+            #If we made it this far, then there was no cluster match
+            clusters.append([pt]) # pt starts its own cluster
+
+
+        print("Found " + str(len(clusters)) + " clusters")
+        return clusters
+
+    def calcVertices(self, clusters):
+        vertices = []
+
+        for C in clusters:
+            N = len(C)
+            avg = np.array([0, 0])
+            for p in C:
+                avg += np.array(p)
+            avg = np.array(avg)//N
+            vertices.append(avg)
+
+        return vertices
+
+    #erodes and dilates n times
+    def refineView(self, n):
+        k = np.ones((3, 3), np.float32)
+        for i in range(0, n):
+            self.cam.view = cv2.erode(self.cam.view, kernel=k)
+            self.cam.view = cv2.dilate(self.cam.view, kernel=k)
+
+
+        self.threshold(10,255)
+
+    def threshold(self, min, max):
+        ret, self.cam.view = cv2.threshold(self.cam.view, min, max, 0)
+
+    #shrinks image, less computations needed
+    def getROI(self):
+        self.cam.view = self.cam.view[100:1080-100, 500: 1920-500]
+
     # interface functions ==========================================
 
     # moves camera in directions specified by fn name
-    def move_down(self):
-        newPhi = self.cameraPos["phi"] - self.moveSpeed
+    def move_down(self, amt=0):
+        i=1
+        if amt != 0:
+            i=0
+        newPhi = self.cameraPos["phi"] - self.moveSpeed*i + amt
         if 0 <= newPhi:
             self.cameraPos["phi"] = newPhi
             print("moved DOWN to " + str(self.cameraPos))
@@ -216,8 +347,11 @@ class Robot:
             print("Cannot move UP, already at maximum")
         self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
 
-    def move_up(self):
-        newPhi = self.cameraPos["phi"] + self.moveSpeed
+    def move_up(self, amt=0):
+        i = 1
+        if amt != 0:
+            i = 0
+        newPhi = self.cameraPos["phi"] + self.moveSpeed*i + amt
         if newPhi <= pi:
             self.cameraPos["phi"] = newPhi
             print("moved UP to " + str(self.cameraPos)) # tell the folks at home
@@ -229,14 +363,20 @@ class Robot:
             print("Cannot move DOWN, already at minimum")
         self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
 
-    def move_left(self):
-        newTheta = self.cameraPos["theta"] - self.moveSpeed
+    def move_left(self, amt=0):
+        i = 1
+        if amt != 0:
+            i = 0
+        newTheta = self.cameraPos["theta"] - self.moveSpeed*i + amt
         self.cameraPos["theta"] = newTheta % (2*pi)
         print("moved LEFT to " + str(self.cameraPos))
         self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
 
-    def move_right(self):
-        newTheta = self.cameraPos["theta"] + self.moveSpeed
+    def move_right(self, amt=0):
+        i = 1
+        if amt != 0:
+            i = 0
+        newTheta = self.cameraPos["theta"] + self.moveSpeed*i + amt
         self.cameraPos["theta"] = newTheta % (2*pi)
         print("moved RIGHT to " + str(self.cameraPos))
         self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
@@ -275,46 +415,47 @@ class Robot:
             f.write(self.cam.printParams())
             f.close()
 
-    def enhanceView(self):
-        #squaring to maxize face contrast
-
-        self.cam.view = self.cam.view ** 2
-        self.cam.vew = self.cam.view // np.max(self.cam.view)
-        edges = cv2.Canny(self.cam.view, 50, 255)
-        self.displayView()
-        self.showImg(edges)
+    def loadImg(self, file):
+        print("loading " + file)
+        self.cam.view = cv2.imread(file, 0)
 
     def __str__(self):
         pass
 
+#  Unit Tests -------------------------------------------------
+
+def TestCenterObject(robot):
+    print(">>>> ROBOT centerObject")
+    robot.centerObject(debug=True)
+
+    print(">>>> ROBOT Processing front view")
+    robot.set_radius(1.5)
+
+def TestVerticeCount(robot):
+    print(">>>> Testing vertice counting")
+    NUM_VERTS = 4
+    robot.loadImg("views/robot1_1_view3.png")
+    #robot.processCameraView()
+    robot.enhanceView()
+    robot.findVertices()
+
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print("ERROR - SameDiff.py requires 1 argument <filepath>")
+        print("ERROR - SameDiff.py requires 1 argument <csvpath>")
         exit(0)
 
     if os.path.exists("views/movement.txt"):
         os.remove("views/movement.txt")
 
-    file = str(sys.argv[1])
+    file = str(sys.argv[1])  # Can replace this with the path of the file
     DL = DataLoader(file)
 
     robot1 = Robot(DL, 1, 0, debug=False)
-    robot2 = Robot(DL, 1, 1)
+    robot2 = Robot(DL, 1, 1, debug=False)
 
-    robot1.centerObject(debug=True)
+    TestCenterObject(robot1)
+    TestVerticeCount(robot1)
 
-    robot1.set_radius(1.5)
 
-    robot1.processCameraView()
-    robot1.enhanceView()
-
-# params = {
-#		'cam_x': -0.911,
-#		'cam_y': 1.238,
-#		'cam_z': -4.1961,
-#		'cam_qw': -0.0544,
-#		'cam_qx': -0.307,
-#		'cam_qy': 0.9355,
-#		'cam_qz': 0.16599
-#	}
