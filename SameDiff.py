@@ -38,6 +38,43 @@ def dist_2d(A, B):
     AB = [B[0] - A[0], B[1] - A[1]]
     return round(np.sqrt(AB[0]**2 + AB[1]**2), 8)
 
+
+# Weighted Least Squares for 2D points centroids
+def WLSQ(points):
+    img = np.zeros((1000,1000,3), np.uint8)
+
+    points = np.array(points)
+    print("Calculating weighted least squares")
+
+    for V in points:
+        cv2.circle(img, (V[1], V[0]), 3, (0, 0, 255), -1)
+
+    # init weights
+    weights = []
+    for p in points:
+        weights.append(0)
+
+    # get center
+    N = len(points)
+    avg = np.array([0, 0])
+    for p in points:
+        avg += np.array(p)
+    COM = np.array(avg) // N  # avg is the center of mass
+    cv2.circle(img, (COM[1], COM[0]), 3, (255, 255, 0), -1)
+
+    for i in range(0, len(points)):
+        X = points[i] - COM + normalize((np.array([np.random.randint(1,100), np.random.randint(1,100)])))/10000000000000 #peturbation term
+        sq = (X[0] ** 2 + X[1] ** 2) #singularity term
+        weights[i] = (1 / sq)
+
+    avg = np.array([0.00000000001, 0.00000000001],)
+    # weighted least squares minimization
+    W = np.sum(weights)
+    for i in range(0, len(points)):
+        avg = avg + (points[i] * weights[i] / W)
+
+    return avg.astype(int)
+
 class Camera:
     def __init__(self):
         self.q = R.from_quat([0, 0, sin(np.pi / 4), -sin(np.pi / 4)]).as_quat()
@@ -147,15 +184,15 @@ class Robot:
             return (cX, cY)
 
     #Calculates the 3D position based on a binocular shift b
-    def calculate_pos(self, C1, C2, b):
+    def calculate_pos(self, C1, C2, b, reso=(1920, 1080)):
         # stereo-distance:
         f = 2110  # apparent focus wtf
         Z = (b * f) / (np.abs(C1[0] - C2[0]))  # distance in pixels of center along x-axis
 
-        dp = (960 - C1[0])  # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
+        dp = (reso[0]//2 - C1[0])  # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
         dy = Z * dp / f  # actual distance
 
-        dp = (540 - C1[1])
+        dp = (reso[1]//2 - C1[1])
         dx = Z * dp / f
         dz = 4 - Z  # camera z-pos minus depth
 
@@ -224,9 +261,10 @@ class Robot:
         self.cam.view = cv2.medianBlur(self.cam.view, 7)
 
 
-        img = cv2.cvtColor(np.zeros_like(self.cam.view), cv2.COLOR_GRAY2RGB)
+        img = cv2.cvtColor(self.cam.view, cv2.COLOR_GRAY2RGB)
         verts = np.zeros_like(self.cam.view)
 
+        # do harris corner detection at multiple settings, then aggregate results
         dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.02)
         dst = cv2.dilate(dst, None)
         verts[dst > 0.01*dst.max()] = 50
@@ -239,26 +277,34 @@ class Robot:
         dst = cv2.dilate(dst, None)
         verts[dst > 0.01 * dst.max()] += 50
 
-        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.05)
-        dst = cv2.dilate(dst, None)
-        verts[dst > 0.01 * dst.max()] += 50
+        #dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.05)
+        #dst = cv2.dilate(dst, None)
+        #0verts[dst > 0.01 * dst.max()] += 50
 
-        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.07)
-        dst = cv2.dilate(dst, None)
-        verts[dst > 0.01 * dst.max()] = 50
+        #dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.07)
+        #dst = cv2.dilate(dst, None)
+        #verts[dst > 0.01 * dst.max()] += 50
 
         verts[verts >= 150] = 255
         verts[verts != 255] = 0
 
-        #self.showImg(verts)
+        # now process results from harris, find most likely vertices
         clusters = self.getClusters(verts)
         vertices = self.calcVertices(clusters)
+
         for V in vertices:
-            cv2.circle(img, tuple(V), 5, (0, 255, 0), -1)
+            cv2.circle(img, (V[1], V[0]), 5, (0, 0, 255), -1)
+
+        CC = 75
+        for C in clusters:
+            for v in C:
+                img[v[0]:v[0] + 1, v[1]:v[1] + 1] = [CC, CC*2, CC*3]
+            CC += 25
+
         self.showImg(img)
         #contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         #self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
-        cv2.imwrite("views/edges.png", self.cam.view)
+        cv2.imwrite("views/edges.png", img)
 
     def getClusters(self, verts):
         pts = []
@@ -295,18 +341,14 @@ class Robot:
 
 
         print("Found " + str(len(clusters)) + " clusters")
-        return clusters
+        return np.array(clusters)
 
     def calcVertices(self, clusters):
         vertices = []
-
         for C in clusters:
-            N = len(C)
-            avg = np.array([0, 0])
-            for p in C:
-                avg += np.array(p)
-            avg = np.array(avg)//N
-            vertices.append(avg)
+            wlsq = WLSQ(C)
+
+            vertices.append(wlsq)
 
         return vertices
 
@@ -441,6 +483,7 @@ def TestVerticeCount(robot):
 
 
 
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("ERROR - SameDiff.py requires 1 argument <csvpath>")
@@ -455,7 +498,8 @@ if __name__ == "__main__":
     robot1 = Robot(DL, 1, 0, debug=False)
     robot2 = Robot(DL, 1, 1, debug=False)
 
-    TestCenterObject(robot1)
-    TestVerticeCount(robot1)
+    TestCenterObject(robot2)
+    TestVerticeCount(robot2)
+
 
 
