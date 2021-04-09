@@ -133,6 +133,7 @@ class Robot:
         self.moveSpeed = pi/8
         self.offset = [0, 0, 0]
         self.debugMode = debug
+        self.enhancedView = False
 
 
     # gets the view based on where the camera currently is
@@ -149,6 +150,7 @@ class Robot:
             if self.debugMode:
                 print("Saved view: " + fileName)
 
+        self.enhancedView = False
         self.viewCount += 1
 
     def displayView(self):
@@ -249,8 +251,15 @@ class Robot:
         #squaring to maxize face contrast
         print("Enhancing View Image")
         self.getROI()
+        print(" > maximizing differences")
         self.cam.view = self.cam.view ** 2
+        print(" > Normalizing")
         self.cam.vew = self.cam.view // np.max(self.cam.view)
+        print(" > De-noising")
+        self.cam.view = cv2.medianBlur(self.cam.view, 3)
+        self.enhancedView = True
+        cv2.imwrite("views/robot"+str(self.objNo)+ "_"+str(self.pairNo)+"_"+"enhanced.png", self.cam.view)
+        print("View Enhanced")
 
         #return edges
 
@@ -308,7 +317,7 @@ class Robot:
 
     def getClusters(self, verts):
         pts = []
-        maxDist = 50 #maximum number of pixels away for something to be considered part of the cluster
+        maxDist = 25 #maximum number of pixels away for something to be considered part of the cluster
         tempImg = cv2.cvtColor(np.zeros_like(self.cam.view), cv2.COLOR_GRAY2RGB)
 
         #put get all high probability points
@@ -340,7 +349,13 @@ class Robot:
             clusters.append([pt]) # pt starts its own cluster
 
 
+        print("pruning clusters...")
+        for i in range(0, len(clusters)):
+            if len(clusters[i]) <= 5:
+                clusters.pop(i)
+
         print("Found " + str(len(clusters)) + " clusters")
+
         return np.array(clusters)
 
     def calcVertices(self, clusters):
@@ -367,7 +382,49 @@ class Robot:
 
     #shrinks image, less computations needed
     def getROI(self):
-        self.cam.view = self.cam.view[100:1080-100, 500: 1920-500]
+        self.cam.view = self.cam.view[200:1080-200, 600: 1920-600]
+
+    def findFaces(self):
+        print("Localizing faces in current view")
+        if not self.enhancedView:
+            print("View needs to be enhanced")
+            self.enhanceView()
+
+        # Get histogram of colours
+        print(" > Collecting colour histogram (this may take a few seconds)")
+        bucketSize = 25
+        colors = np.zeros((10))
+        for i in range(0, bucketSize):
+            for P in self.cam.view:
+                for p in P:
+                    if i * bucketSize <= p < (i + 1) * bucketSize:
+                        colors[i] += 1
+            print("    > " + str(round((i+1)/25, 2)*100) + "% complete")
+        colors[0] = 0  # we don't care about black background
+        faceColors = []
+        for i in range(0, 10):
+            C = colors[i]
+            #if there are more than 1000 occurrences in that bucket, its probably a face
+            if C >= 1000:
+                faceColors.append([i*bucketSize,(i+1)*bucketSize])
+        print(" > Found " + str(len(faceColors)) + " faces")
+        #now lets identify faces
+        print(" > Generating masks")
+        faces = []
+        for fc in faceColors:
+            face = np.zeros_like(self.cam.view)
+            #loop through view
+            for x in range(0, len(self.cam.view)):
+                for y in range (0, len(self.cam.view[0])):
+                    if fc[0] <= self.cam.view[x, y] < fc[1]:
+                        face[x,y] = 255
+            face = cv2.medianBlur(face, 3)
+            faces.append(face)
+
+        for face in faces:
+            self.showImg(face)
+        print("Faces localized, masks generated")
+        return faces
 
     # interface functions ==========================================
 
@@ -481,8 +538,10 @@ def TestVerticeCount(robot):
     robot.enhanceView()
     robot.findVertices()
 
-
-
+def TestFindFaces(robot):
+    print(">>>> Testing Find Faces")
+    robot.loadImg("views/robot1_1_view3.png")
+    robot.findFaces()
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -499,7 +558,8 @@ if __name__ == "__main__":
     robot2 = Robot(DL, 1, 1, debug=False)
 
     TestCenterObject(robot2)
-    TestVerticeCount(robot2)
+    #TestVerticeCount(robot2)
+    TestFindFaces(robot2)
 
 
 
