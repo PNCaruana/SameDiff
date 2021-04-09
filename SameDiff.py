@@ -571,4 +571,12 @@ if __name__ == "__main__":
     TestFindFaces(robot2)
 
     # DONE, software will ding when done processing
+    print("======================================================")
+    print("      //////   //    //   ////                        ")
+    print("      //       ////  //   //  //                      ")
+    print("      //////   // // //   //   //                     ")
+    print("      //       //  ////   //  //                      ")
+    print("      //////   //    //   ////                        ")
+    print("======================================================")
+    print("I HAVE FINISHED, THANK YOU HAVE A NICE DAY")
     playsound("Toaster Oven Ding - Sound Effect.mp3")
