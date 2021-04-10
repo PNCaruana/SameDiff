@@ -17,7 +17,6 @@ def rotMatrix(a, b, c):
          [-sin(b), cos(b) * sin(c), cos(b) * cos(c)]]
     return M
 
-
 def normalize(a):
     a = np.array(a)
     n = 0
@@ -25,7 +24,6 @@ def normalize(a):
         n += x ** 2
     N = np.sqrt(n)
     return a / N
-
 
 def orientation(right, up, forward):
     right = normalize(right)
@@ -37,18 +35,19 @@ def orientation(right, up, forward):
          [right[2], up[2], forward[2]]]
     return M
 
-
 def dist_2d(A, B):
     AB = [B[0] - A[0], B[1] - A[1]]
     return round(np.sqrt(AB[0] ** 2 + AB[1] ** 2), 8)
 
-
+def same_2d(A, B):
+    if A[0]==B[0] and A[1] == B[1]:
+        return True
+    return False
 # Weighted Least Squares for 2D points centroids
 def WLSQ(points):
     img = np.zeros((1000, 1000, 3), np.uint8)
 
     points = np.array(points)
-    print("Calculating weighted least squares")
 
     for V in points:
         cv2.circle(img, (V[1], V[0]), 3, (0, 0, 255), -1)
@@ -178,7 +177,6 @@ class Robot:
         # find centroid
         for c in contours:
             M = cv2.moments(c)
-
             # calculate x,y coordinate of center
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
@@ -276,21 +274,70 @@ class Robot:
         # ret, thresh = cv2.threshold(self.cam.view, 127, 255, 0)
         # self.cam.view = cv2.Canny(self.cam.view, 50, 255)
         # self.cam.view = cv2.dilate(self.cam.view, kernel=np.ones((3,3), np.float32))
-        self.cam.view = cv2.medianBlur(self.cam.view, 7)
+
+        #self.cam.view = cv2.medianBlur(self.cam.view, 7)
+
+        if not self.enhancedView:
+            print("(View needs to be enhanced)")
+            self.enhanceView()
 
         img = cv2.cvtColor(self.cam.view, cv2.COLOR_GRAY2RGB)
-        verts = np.zeros_like(self.cam.view)
+        faces = self.findFaces()
+        vertices = []
+        #find vertices on the face level
+        for i in range(0, len(faces)):
+            print("Determining vertices in face " + str(i))
+            face = faces[i]
+            verts = self.detectCorners(face)
+            # now process results from harris, find most likely vertices
+            clusters = self.getClusters(verts)
+            newVerts = self.calcVertices(clusters)
+            vertices.extend(newVerts)
+        # now do vertices globally to reduce redundancy
+        clusters = self.getClusters_global(vertices)
+        vertices = self.calcVertices(clusters)
+
+        #filter redundant vertices
+        print("Filtering redundant vertices")
+        fVertices = [] #vertices to filter out
+        N = len(vertices)
+        while vertices:
+            V1 = vertices.pop(0)
+            fVertices.append(V1)
+            for j in range(0, len(vertices)):
+                V2 = np.array(vertices[j])
+                if dist_2d(V1, V2) < 25:
+                    vertices.pop(j)
+                    break
+            # didnt find any problems, move to next
+
+        print("Removed " + str(N - len(fVertices)) + " vertices")
+
+        for V in fVertices:
+            cv2.circle(img, (V[1], V[0]), 5, (0, 0, 255), -1)
+
+        self.showImg(img)
+        # contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
+        cv2.imwrite("views/edges.png", img)
+
+
+    #  Returns list 2D coords that it thinks are likely to be corners
+    def detectCorners(self, face):
+        verts = np.zeros_like(face)
+
+        img = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
 
         # do harris corner detection at multiple settings, then aggregate results
-        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.02)
+        dst = cv2.cornerHarris(face, 2, 5, 0.02)
         dst = cv2.dilate(dst, None)
         verts[dst > 0.01 * dst.max()] = 50
 
-        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.03)
+        dst = cv2.cornerHarris(face, 2, 5, 0.03)
         dst = cv2.dilate(dst, None)
         verts[dst > 0.01 * dst.max()] += 50
 
-        dst = cv2.cornerHarris(self.cam.view, 2, 5, 0.04)
+        dst = cv2.cornerHarris(face, 2, 5, 0.04)
         dst = cv2.dilate(dst, None)
         verts[dst > 0.01 * dst.max()] += 50
 
@@ -304,24 +351,8 @@ class Robot:
 
         verts[verts >= 150] = 255
         verts[verts != 255] = 0
-
-        # now process results from harris, find most likely vertices
-        clusters = self.getClusters(verts)
-        vertices = self.calcVertices(clusters)
-
-        for V in vertices:
-            cv2.circle(img, (V[1], V[0]), 5, (0, 0, 255), -1)
-
-        CC = 75
-        for C in clusters:
-            for v in C:
-                img[v[0]:v[0] + 1, v[1]:v[1] + 1] = [CC, CC * 2, CC * 3]
-            CC += 25
-
-        self.showImg(img)
-        # contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        # self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
-        cv2.imwrite("views/edges.png", img)
+        print(" > Found " + str(len(verts)) + " potential corners")
+        return verts
 
     def getClusters(self, verts):
         pts = []
@@ -335,7 +366,7 @@ class Robot:
                     pts.append([x, y])
 
         clusters = []  # init
-        print("Clustering " + str(len(pts)) + " points")
+        print(" > Clustering " + str(len(pts)) + " points")
         while pts:
             pt = pts.pop(0)
 
@@ -356,39 +387,51 @@ class Robot:
             # If we made it this far, then there was no cluster match
             clusters.append([pt])  # pt starts its own cluster
 
-        print("pruning clusters...")
+        print(" > pruning clusters with too few members...")
         for i in range(0, len(clusters)):
             if len(clusters[i]) <= 5:
                 clusters.pop(i)
 
-        print("Found " + str(len(clusters)) + " clusters")
+        print(" > Found " + str(len(clusters)) + " clusters")
+
+        return np.array(clusters)
+
+    def getClusters_global(self, verts):
+        pts = verts
+        maxDist = 25
+        clusters = []  # init
+        print("Globally aggregating vertices from all faces")
+        while pts:
+            pt = pts.pop(0)
+
+            # check clusters first, see if it belongs in any cluster
+            next = False
+            for C in clusters:
+                for cp in C:
+                    if dist_2d(pt, cp) <= maxDist:
+                        C.append(pt)
+                        next = True
+                        break;
+                if next:
+                    break
+            # if we added to  cluster, dont do anything more with this pt
+            if next:
+                continue
+
+            # If we made it this far, then there was no cluster match
+            clusters.append([pt])  # pt starts its own cluster
 
         return np.array(clusters)
 
     def calcVertices(self, clusters):
         vertices = []
-        for C in clusters:
+        for i in range(0,len(clusters)):
+            C = clusters[i]
+            print("   > Calculating weighted least squares centroid for cluster " + str(i+1) + "/" + str(len(clusters)))
             wlsq = WLSQ(C)
-
             vertices.append(wlsq)
 
         return vertices
-
-    # erodes and dilates n times
-    def refineView(self, n):
-        k = np.ones((3, 3), np.float32)
-        for i in range(0, n):
-            self.cam.view = cv2.erode(self.cam.view, kernel=k)
-            self.cam.view = cv2.dilate(self.cam.view, kernel=k)
-
-        self.threshold(10, 255)
-
-    def threshold(self, min, max):
-        ret, self.cam.view = cv2.threshold(self.cam.view, min, max, 0)
-
-    # shrinks image, less computations needed
-    def getROI(self):
-        self.cam.view = self.cam.view[200:1080 - 200, 600: 1920 - 600]
 
     def findFaces(self):
         print("Localizing faces in current view")
@@ -396,16 +439,12 @@ class Robot:
             print("(View needs to be enhanced)")
             self.enhanceView()
 
+
         # Get histogram of colours
         print(" > Collecting colour histogram (this may take a few seconds)")
         bucketSize = 25
-        colors = np.zeros((10))
-        for i in range(0, bucketSize):
-            for P in self.cam.view:
-                for p in P:
-                    if i * bucketSize <= p < (i + 1) * bucketSize:
-                        colors[i] += 1
-            print("    > " + str(round((i + 1) / 25, 2) * 100) + "% complete")
+        colors = cv2.calcHist([self.cam.view], [0], None, [10], [0, 256])
+
         colors[0] = 0  # we don't care about black background
         faceColors = []
         for i in range(0, 10):
@@ -424,13 +463,54 @@ class Robot:
                 for y in range(0, len(self.cam.view[0])):
                     if fc[0] <= self.cam.view[x, y] < fc[1]:
                         face[x, y] = 255
-            face = cv2.medianBlur(face, 3)
+            face = cv2.medianBlur(face, 5)
             faces.append(face)
 
-        for face in faces:
-            self.showImg(face)
+
         print("Faces localized, masks generated")
         return faces
+
+    def removeColinearVertices(self, verts, face):
+        i = 0
+        self.showImg(face)
+        line = np.zeros_like(face)
+        for V in verts:
+            line[V[0]:V[0]+3, V[1]:V[1]+3] = 255
+        self.showImg(line)
+        while verts and i < len(verts):
+            V1 = verts[i]
+            for j in range(1, len(verts)):
+                V2 = verts[j]
+                line = np.zeros_like(face)
+                line = cv2.line(line, (V1[1], V1[0]), (V2[1], V2[0]), 255, 3)
+                for k in range(j+1, len(verts)):
+                    V3 = verts[k]
+                    line[V3[0]:V3[0]+3, V3[1]:V3[1]+3] = 150
+                    self.showImg(line)
+                    if not same_2d(V1, V3) and not same_2d(V2, V3):
+                        if line[V3[0], V3[1]] == 255:
+                            verts.pop(k)
+                            break
+                break
+            i = i+1
+
+        return verts
+    # erodes and dilates n times
+    def refineView(self, n):
+        k = np.ones((3, 3), np.float32)
+        for i in range(0, n):
+            self.cam.view = cv2.erode(self.cam.view, kernel=k)
+            self.cam.view = cv2.dilate(self.cam.view, kernel=k)
+
+        self.threshold(10, 255)
+
+    def threshold(self, min, max):
+        ret, self.cam.view = cv2.threshold(self.cam.view, min, max, 0)
+
+    # shrinks image, less computations needed
+    def getROI(self):
+        self.cam.view = self.cam.view[200:1080 - 200, 600: 1920 - 600]
+
 
     # interface functions ==========================================
 
@@ -536,21 +616,18 @@ def TestCenterObject(robot):
     print(">>>> ROBOT Processing front view")
     robot.set_radius(1.5)
 
-
 def TestVerticeCount(robot):
     print(">>>> Testing vertice counting")
     NUM_VERTS = 4
-    robot.loadImg("views/robot1_1_view3.png")
+    robot.loadImg("views/robot0_1_view3.png")
     # robot.processCameraView()
     robot.enhanceView()
     robot.findVertices()
 
-
 def TestFindFaces(robot):
     print(">>>> Testing Find Faces")
-    robot.loadImg("views/robot1_1_view3.png")
+    robot.loadImg("views/robot0_1_view3.png")
     robot.findFaces()
-
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -567,8 +644,8 @@ if __name__ == "__main__":
     robot2 = Robot(DL, 1, 1, debug=False)
 
     TestCenterObject(robot2)
-    # TestVerticeCount(robot2)
-    TestFindFaces(robot2)
+    TestVerticeCount(robot2)
+    #TestFindFaces(robot2)
 
     # DONE, software will ding when done processing
     print("======================================================")
