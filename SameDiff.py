@@ -79,6 +79,20 @@ def WLSQ(points):
 
     return avg.astype(int)
 
+def fixArrayForFlow(points):
+    newP = []
+    for p in points:
+        newP.append([p[::-1]])
+    points = np.array(newP, dtype=np.float32)
+    return points
+
+def unfuckFlowArray(points):
+    newP = []
+    points = (points.astype(int)).tolist()
+    for P in points:
+        for p in P:
+            newP.append(p[::-1])
+    return newP
 
 class Camera:
     def __init__(self):
@@ -88,6 +102,10 @@ class Camera:
         self.cam_z = 0
         self.focus = (0, 0, 0)
         self.view = np.zeros((500, 500))
+
+        self.forward = [0,0,-1]
+        self.up = [1,0,0]
+        self.side = [0,1,0]
 
     def getParams(self):
         return {"cam_x": self.cam_x,
@@ -115,6 +133,10 @@ class Camera:
         u = np.cross(s, f);
         u = u / np.linalg.norm(u)
 
+        self.forward = f
+        self.up = u
+        self.side = s
+
         rot = np.zeros((3, 3))
 
         rot[0:3, 0] = s
@@ -124,6 +146,23 @@ class Camera:
         Orientation = R.from_matrix(rot).as_quat()
         self.q = np.round(Orientation, 8)
 
+class Polyhedron:
+
+    def __init__(self):
+        points = [] #list of all points in 3D
+        faces = [] #list of groups of points which make up faces
+
+    def addFace(self, faces):
+        self.faces.extend(faces)
+
+    def addPoints(self, points):
+        self.points.extend(points)
+
+    def numFaces(self):
+        return len(self.faces)
+
+    def numPoints(self):
+        return len(self.points)
 
 class Robot:
 
@@ -140,6 +179,7 @@ class Robot:
         self.offset = [0, 0, 0]
         self.debugMode = debug
         self.enhancedView = False
+        self.poly = Polyhedron() #Robots working model of what its looking at
 
     # gets the view based on where the camera currently is
     def processCameraView(self, debug=False):
@@ -166,6 +206,11 @@ class Robot:
         cv2.imshow('img', img)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
+
+    def loadImg(self, file):
+        print("loading " + file)
+        self.cam.view = cv2.imread(file, 0)
+        self.enhancedView = False
 
     # gets centroid of image blob
     def getCentroid(self):
@@ -270,7 +315,7 @@ class Robot:
 
         # return edges
 
-    def findVertices(self):
+    def findFeatures(self):
         # ret, thresh = cv2.threshold(self.cam.view, 127, 255, 0)
         # self.cam.view = cv2.Canny(self.cam.view, 50, 255)
         # self.cam.view = cv2.dilate(self.cam.view, kernel=np.ones((3,3), np.float32))
@@ -298,29 +343,28 @@ class Robot:
         vertices = self.calcVertices(clusters)
 
         #filter redundant vertices
-        print("Filtering redundant vertices")
-        fVertices = [] #vertices to filter out
-        N = len(vertices)
-        while vertices:
-            V1 = vertices.pop(0)
-            fVertices.append(V1)
-            for j in range(0, len(vertices)):
-                V2 = np.array(vertices[j])
-                if dist_2d(V1, V2) < 25:
-                    vertices.pop(j)
-                    break
-            # didnt find any problems, move to next
+        #print("Filtering redundant vertices")
+        #fVertices = [] #vertices to filter out
+        #N = len(vertices)
+        #while vertices:
+        #    V1 = vertices.pop(0)
+        #    fVertices.append(V1)
+        #    for j in range(0, len(vertices)):
+        #        V2 = np.array(vertices[j])
+        #        if dist_2d(V1, V2) < 25:
+        #            vertices.pop(j)
+        #            break
+        #    # didnt find any problems, move to next
 
-        print("Removed " + str(N - len(fVertices)) + " vertices")
+        #print("Removed " + str(N - len(fVertices)) + " vertices")
 
-        for V in fVertices:
+        for V in vertices:
             cv2.circle(img, (V[1], V[0]), 5, (0, 0, 255), -1)
+        cv2.imwrite("views/"+self.toString()+"vertices.png", img)
 
-        self.showImg(img)
+        return vertices, faces, img
         # contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         # self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
-        cv2.imwrite("views/edges.png", img)
-
 
     #  Returns list 2D coords that it thinks are likely to be corners
     def detectCorners(self, face):
@@ -470,6 +514,67 @@ class Robot:
         print("Faces localized, masks generated")
         return faces
 
+    # calculates object features (vertices, faces) from current view
+    def calcViewFeatures(self):
+        # we want to move the camera some horizontal offset. The math here is that for small theta, sin(theta)=theta
+        # The distance moved will be R*theta then, and if the movement is small enough we can approximate this as
+        # purely horizontal
+        print("Calculating view features (3D vertex positions and faces)")
+        #self.processCameraView()
+        self.loadImg("views/robot1_1_view3.png")
+        verts1, faces1, keypoints1 = self.findFeatures()
+        oldView = np.copy(self.cam.view)
+        #self.showImg(keypoints1)
+
+        dtheta = 0.1
+        self.move_right(dtheta)
+        #self.processCameraView()
+        self.loadImg("views/robot1_1_view4.png")
+        verts2, faces2, keypoints2 = self.findFeatures()
+        newView = self.cam.view
+        #self.showImg(keypoints2)
+
+        # params for ShiTomasi corner detection
+        feature_params = dict(maxCorners=100,
+                              qualityLevel=0.3,
+                              minDistance=7,
+                              blockSize=7)
+
+        p0 = fixArrayForFlow(verts1)
+        # We can't use verts2 because we have no idea which verts correspond to eachother in the new view.
+        # To solve this, we use optical flow and figure out the corresponding points
+        lk_params = dict(winSize=(15, 15),
+                         maxLevel=2,
+                         criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+
+        nextPts, st, err = cv2.calcOpticalFlowPyrLK(oldView, newView, p0, None, **lk_params)
+        # Now lets see what corresponds to what
+        nextPts = unfuckFlowArray(nextPts)
+        newVert = [] #list of the 2nd verts with order corresponding to original verts
+
+        # loop through vertices, find the closest one, then it must correspond and add to new array which now is ordered
+        # We do this cause our original vertices are much more accurate
+        banned = []
+        for i in range(0, len(nextPts)):
+            pp = nextPts[i]
+            closest = 99999999
+            index = -1
+            for k in range(0, len(verts2)):
+                if k in banned: # if we already looked here. Just to gaurentee no duplicates
+                    continue
+                p = verts2[k]
+                d = dist_2d(pp, p)
+                if d < closest:
+                    closest = d
+                    index = k
+            newVert.append(verts2[index])
+            banned.append(index)
+        print(verts1)
+        print(newVert)
+
+
+
+    # depreciated
     def removeColinearVertices(self, verts, face):
         i = 0
         self.showImg(face)
@@ -599,12 +704,10 @@ class Robot:
             f.write(self.cam.printParams())
             f.close()
 
-    def loadImg(self, file):
-        print("loading " + file)
-        self.cam.view = cv2.imread(file, 0)
 
-    def __str__(self):
-        pass
+
+    def toString(self):
+        return "robot" + str(self.objNo) + "_" + str(self.pairNo)
 
 
 #  Unit Tests -------------------------------------------------
@@ -629,6 +732,10 @@ def TestFindFaces(robot):
     robot.loadImg("views/robot0_1_view3.png")
     robot.findFaces()
 
+def TestFindFeatures(robot):
+    print(">>>> Testing feature correspondance")
+    robot.calcViewFeatures()
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("ERROR - SameDiff.py requires 1 argument <csvpath>")
@@ -644,7 +751,7 @@ if __name__ == "__main__":
     robot2 = Robot(DL, 1, 1, debug=False)
 
     TestCenterObject(robot2)
-    TestVerticeCount(robot2)
+    TestFindFeatures(robot2)
     #TestFindFaces(robot2)
 
     # DONE, software will ding when done processing
