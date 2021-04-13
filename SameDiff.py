@@ -274,7 +274,8 @@ class Robot:
     def calculate_pos(self, C1, C2, b, reso=(1920, 1080), debug=False):
         # stereo-distance:
         f = 2110  # apparent focus wtf
-        Z = (b * f) / (np.abs(C1[0] - C2[0]))  # distance in pixels of center along x-axis
+        d = np.abs(C1[0] - C2[0]) #disparity
+        Z = (b * f) / d  # depth
 
         dp = (reso[0] // 2 - C1[0])  # distance from center when camera is at (0,0,R) in pixels for 1920x1080 image
         dy = Z * dp / f  # actual distance
@@ -290,10 +291,13 @@ class Robot:
             print("<< calculate_pos debug START>>")
             print("C1", C1)
             print("C2", C2)
+            print("d", d)
             print("b", b)
             print("b*f", b * f)
+            print("Z", Z)
             print("c1x, c2x", [C1[0], C2[0]])
             print("|c1x - c2x|", np.abs(C1[0] - C2[0]))
+            print("Reso", reso)
             print("<< calculate_pos debug END>>")
 
         return np.round([dx, dy, dz], 8), round(Z, 8)
@@ -344,18 +348,21 @@ class Robot:
         self.cameraPos = self.defaultCam
 
     def enhanceView(self):
-        # squaring to maxize face contrast
-        print("Enhancing View Image")
-        self.getROI()
-        print(" > maximizing differences")
-        self.cam.view = self.cam.view ** 2
-        print(" > Normalizing")
-        self.cam.vew = self.cam.view // np.max(self.cam.view)
-        print(" > De-noising")
-        self.cam.view = cv2.medianBlur(self.cam.view, 3)
-        self.enhancedView = True
-        cv2.imwrite("views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_" + "enhanced.png", self.cam.view)
-        print("View Enhanced")
+        if not self.enhancedView:
+            # squaring to maxize face contrast
+            print("Enhancing View Image")
+            self.getROI()
+            print(" > maximizing differences")
+            self.cam.view = self.cam.view ** 2
+            print(" > Normalizing")
+            self.cam.vew = self.cam.view // np.max(self.cam.view)
+            print(" > De-noising")
+            self.cam.view = cv2.medianBlur(self.cam.view, 3)
+            self.enhancedView = True
+            cv2.imwrite("views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_" + "enhanced.png", self.cam.view)
+            print("View Enhanced")
+        else:
+            print("View already enhanced")
 
         # return edges
 
@@ -560,20 +567,41 @@ class Robot:
         # purely horizontal
         print("Calculating view features (3D vertex positions and faces)")
         self.processCameraView()
-        # self.loadImg("views/robot1_1_view3.png")
+        #self.loadImg("views/robot1_1_view3.png")
         verts1, faces1, keypoints1 = self.findFeatures()
         oldView = np.copy(self.cam.view)
-        self.showImg(keypoints1)
+        #self.showImg(keypoints1)
 
         b = 0.05
         self.shift(self.cam.side, -b)
         self.processCameraView()
-        # self.loadImg("views/robot1_1_view4.png")
+        #self.loadImg("views/robot1_1_view4.png")
         verts2, faces2, keypoints2 = self.findFeatures()
         newView = self.cam.view
-        self.showImg(keypoints2)
+        #self.showImg(keypoints2)
 
         self.shift(self.cam.side, b)
+
+        stereo = cv2.StereoBM_create(numDisparities=16, blockSize=15)
+        disparity = stereo.compute(oldView, newView)
+        dmin = disparity.min()
+        dmax = disparity.max()
+        disparity = np.uint8(6400 * (disparity - dmin) / (dmax - dmin))
+
+        #cv2.stereoRectify()
+
+        #Q = [[1, 0, 0, -cx],
+        #     [0, 1, 0, -cy],
+        #     [0, 0, 0, f],
+        #     [0, 0, -1/Tx, (cx-cxp)/Tx]]
+
+        #depth = cv2.reprojectImageTo3D(disparity, Q)
+
+        k = np.ones((3, 3), np.float32)
+        disparity = cv2.dilate(disparity, kernel=k, iterations=3)
+        disparity = cv2.GaussianBlur(disparity, (7,7), 0)
+        print("Displaying Disparity Map:")
+        #self.showImg(disparity)
 
         # params for ShiTomasi corner detection
         feature_params = dict(maxCorners=100,
@@ -616,14 +644,21 @@ class Robot:
                 banned.append(index)
         # calculate the 3D positions for each point
         for i in range(0, len(verts1)):
-            p_cam, zdist = self.calculate_pos(verts1[i], newVert[i], b, reso=self.resolution,
+            V1 = verts1[i]
+            V2 = verts2[i]
+            temp = np.copy(keypoints1)
+            cv2.circle(temp, (V1[1], V1[0]), 3,  (255, 0, 255), 3)
+            cv2.circle(temp, (V2[1], V2[0]), 3,  (0, 255, 0), 3)
+            self.showImg(temp)
+            #invert the arrays
+            p_cam, zdist = self.calculate_pos(V1[::-1], V2[::-1], b, reso=self.resolution,
                                               debug=True)  # in camera coordinates
             # ignore point if too far away to be accurate
             if (zdist < self.cameraPos["r"] + 0.5):
                 p_world = self.cam.point2world(p_cam)
                 p_cam = np.round(p_cam, 8)
                 p_world = np.round(p_world, 8)
-                self.poly.addPoints([p_cam])
+                self.poly.addPoints([p_world])
 
     # depreciated
     def removeColinearVertices(self, verts, face):
@@ -781,7 +816,7 @@ class Robot:
 
     # translates camera in dir by amt
     def shift(self, dir, amt):
-        print("Shifting camera by " + str(amt) + "in dir " + str(dir))
+        print("Shifting camera by " + str(amt) + " in dir " + str(dir))
         offset = np.array(self.offset)
         offset = offset + np.array(dir) * amt
 
@@ -802,7 +837,7 @@ def TestCenterObject(robot):
     robot.centerObject(debug=True)
 
     print(">>>> ROBOT Processing front view")
-    robot.set_radius(2.5)
+    robot.set_radius(1.5)
 
 
 def TestVerticeCount(robot):
@@ -867,6 +902,10 @@ def TestCamera2World(robot):
     newp = np.round(robot.cam.point2world(p), 1)
     print("p = " + str(p) + ", newp = " + str(newp) + " | Expected: " + str(exp) + " > " + str(exp == newp))
 
+def TestPointDepth(robot):
+    robot.calcViewFeatures()
+    robot.poly.viewPoints()
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("ERROR - SameDiff.py requires 1 argument <csvpath>")
@@ -881,9 +920,10 @@ if __name__ == "__main__":
     robot1 = Robot(DL, 1, 0, debug=False)
     robot2 = Robot(DL, 1, 1, debug=False)
 
-    TestCamera2World(robot2)
-    #TestCenterObject(robot2)
-    #TestFindFeatures(robot2)
+    #TestCamera2World(robot2)
+    TestCenterObject(robot2)
+    #TestPointDepth(robot2)
+    TestFindFeatures(robot2)
     #TestFindFaces(robot2)
 
     # DONE, software will ding when done processing
@@ -897,4 +937,4 @@ if __name__ == "__main__":
     print("I HAVE FINISHED, THANK YOU HAVE A NICE DAY")
     playsound("Toaster Oven Ding - Sound Effect.mp3")
 
-    #robot2.poly.viewPoints()
+    robot2.poly.viewPoints()
