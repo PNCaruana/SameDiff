@@ -18,7 +18,6 @@ def rotMatrix(a, b, c):
          [-sin(b), cos(b) * sin(c), cos(b) * cos(c)]]
     return M
 
-
 def normalize(a):
     a = np.array(a)
     n = 0
@@ -26,7 +25,6 @@ def normalize(a):
         n += x ** 2
     N = np.sqrt(n)
     return a / N
-
 
 def orientation(right, up, forward):
     right = normalize(right)
@@ -38,17 +36,14 @@ def orientation(right, up, forward):
          [right[2], up[2], forward[2]]]
     return M
 
-
 def dist_2d(A, B):
     AB = [B[0] - A[0], B[1] - A[1]]
     return round(np.sqrt(AB[0] ** 2 + AB[1] ** 2), 8)
-
 
 def same_2d(A, B):
     if A[0] == B[0] and A[1] == B[1]:
         return True
     return False
-
 
 # Weighted Least Squares for 2D points centroids
 def WLSQ(points):
@@ -121,14 +116,12 @@ def WLSQ_3D(points):
 
     return avg
 
-
 def fixArrayForFlow(points):
     newP = []
     for p in points:
         newP.append([p[::-1]])
     points = np.array(newP, dtype=np.float32)
     return points
-
 
 def unfuckFlowArray(points):
     print("Un-fucking optical flow array")
@@ -215,8 +208,6 @@ class Camera:
         R = [self.side, self.up, self.forward]
         return np.matmul(R, point)
 
-
-
 class Polyhedron:
 
     def __init__(self):
@@ -245,9 +236,7 @@ class Polyhedron:
         self.pointCloud.colors = open3d.utility.Vector3dVector(self.colors)
         open3d.visualization.draw_geometries([self.pointCloud])
 
-
 class Robot:
-
     # <int> objNo, either 0 or 1 corresponding to which index key the robot is working with
     def __init__(self, dataLoader, pairNo, objNo, debug=False):
         self.cam = Camera()
@@ -400,6 +389,7 @@ class Robot:
 
         self.cameraPos = self.defaultCam
 
+    # Contrasts colours in current view to better determine features. Achieves this by squaring and then filtering
     def enhanceView(self):
         if not self.enhancedView:
             # squaring to maxize face contrast
@@ -412,19 +402,22 @@ class Robot:
             print(" > De-noising")
             self.cam.view = cv2.medianBlur(self.cam.view, 3)
             self.enhancedView = True
-            cv2.imwrite("views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_" + "enhanced.png", self.cam.view)
+            cv2.imwrite("views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_" + "enhanced"+str(self.viewCount)+".png", self.cam.view)
             print("View Enhanced")
         else:
             print("View already enhanced")
 
         # return edges
 
+    # <output>: vertices, faces, img
+    # Finds features within current view. 'img' contains visual depiction of detected vertices
     def findFeatures(self):
         # ret, thresh = cv2.threshold(self.cam.view, 127, 255, 0)
         # self.cam.view = cv2.Canny(self.cam.view, 50, 255)
         # self.cam.view = cv2.dilate(self.cam.view, kernel=np.ones((3,3), np.float32))
-
         # self.cam.view = cv2.medianBlur(self.cam.view, 7)
+        # contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        # self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
 
         if not self.enhancedView:
             print("(View needs to be enhanced)")
@@ -451,10 +444,9 @@ class Robot:
         cv2.imwrite("views/" + self.toString() + "vertices" + str(self.viewCount) + ".png", img)
 
         return vertices, faces, img
-        # contours, hierarchy = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        # self.cam.view = cv2.drawContours(self.cam.view, contours, -1, (0, 255, 0), 3)
 
-    #  Returns list 2D coords that it thinks are likely to be corners
+    # <input> : face, an image mask depicting a face of the shape
+    # <output>: verts, a 2D image array where white dots (255) are corner points detected by harris corner detection
     def detectCorners(self, face):
         verts = np.zeros_like(face)
 
@@ -497,10 +489,9 @@ class Robot:
         print(" > Found " + str(len(verts)) + " potential corners")
         return verts
 
+    # <input> : verts, img array where white (255) points are potential vertices
+    # <output>: clusters = [C1, C2, ...] where Ci =[p, p2, ...] are unique sets of points, that are close within maxDist
     def getClusters(self, verts=[], maxDist=25, pts=[]):
-
-
-
         # maxDist: maximum number of pixels away for something to be considered part of the cluster
 
         #tempImg = cv2.cvtColor(np.zeros_like(self.cam.view), cv2.COLOR_GRAY2RGB)
@@ -543,6 +534,9 @@ class Robot:
 
         return np.array(clusters)
 
+    # <input> : verts, array of point coordinates [x,y] which depict vertices detected for all faces
+    # <output>: clusters = [C1, C2, ...] where Ci are unique sets of points
+    # This function aggregates vertices accross all faces to remove redundancy (i.e. some verts belong to >1 faces)
     def getClusters_global(self, verts):
         pts = verts
         maxDist = 25
@@ -570,6 +564,9 @@ class Robot:
 
         return np.array(clusters)
 
+    # <input> : clusters = [C1, ... CN] where Ci = [[x1,y1], [x2,y2], ...] are unique sets of points
+    # <output>: vertices = [V1, ... VN] where Vi = [x,y] is a unique point
+    # This function calculates the most likely centroid for each cluster of points using a WLSQ method
     def calcVertices(self, clusters):
         vertices = []
         for i in range(0, len(clusters)):
@@ -581,6 +578,8 @@ class Robot:
 
         return vertices
 
+    # Finds faces in the current robot view. Working assumption is that face colour is unique and little variation
+    # <output>: faces = [face1, face2, ...], where facei is an image mask within the current view depicting 1 face
     def findFaces(self):
         print("Localizing faces in current view")
         if not self.enhancedView:
@@ -616,6 +615,48 @@ class Robot:
 
         print("Faces localized, masks generated")
         return faces
+
+    # <input> : verts = [V1, V2, ...], Vi=[x,y], are predicted verts within 1 face
+    # <output>: verts = [V1, V2, ...] is a subset of original verts
+    # This function looks to see if any vertice lies directly between two others. This cannot occur in a real polygon,
+    # thus they are removed
+    def removeColinearVertices(self, verts, face):
+        print("Removing collinear vertices")
+        i = 0
+        originalVerts = len(verts)
+
+        while True:
+            next = False
+            for i in range(0, len(verts)):
+                for j in range(0, len(verts)):
+                    if j == i:
+                        continue  # don't compare with itself
+                    line = np.zeros_like(face)
+                    V1 = verts[i]
+                    V2 = verts[j]
+                    cv2.line(line, (V1[1], V1[0]), (V2[1], V2[0]), 255, 5)  # draw a line from V1 to V2
+                    for k in range(0, len(verts)):
+                        if k == i or k == j:
+                            continue  # not V1 or V2
+                        V3 = verts[k]
+                        if line[V3[0], V3[1]] == 255:
+                            # V3 is in the line segment, therefore it is collinear
+                            line[V3[0]-3:V3[0]+3, V3[1]-3:V3[1]+3] = 150
+                            #self.showImg(line)
+                            verts.pop(k)
+                            next = True
+                            break
+                    if next:
+                        break
+                if next:
+                    break
+
+            if next:
+                continue
+            break # Will only leave the loop if it runs through all points and finds no collinear
+
+        print("Removed (" + str(originalVerts - len(verts)) + ") vertices")
+        return verts
 
     # calculates object features (vertices, faces) from current view
     def calcViewFeatures(self, dbgTkn=0):
@@ -702,82 +743,19 @@ class Robot:
         return pts
         #self.poly.viewPoints()
 
-    # depreciated
-    def removeColinearVertices(self, verts, face):
-        print("Removing collinear vertices")
-        i = 0
-        originalVerts = len(verts)
-        #self.showImg(face)
-        #line = np.zeros_like(face)
-
-        #for V in verts:
-        #    line[V[0]:V[0] + 3, V[1]:V[1] + 3] = 255
-        #self.showImg(line)
-
-        while True:
-            next = False
-            for i in range(0, len(verts)):
-                for j in range(0, len(verts)):
-                    if j == i:
-                        continue  # don't compare with itself
-                    line = np.zeros_like(face)
-                    V1 = verts[i]
-                    V2 = verts[j]
-                    cv2.line(line, (V1[1], V1[0]), (V2[1], V2[0]), 255, 5)  # draw a line from V1 to V2
-                    for k in range(0, len(verts)):
-                        if k == i or k == j:
-                            continue  # not V1 or V2
-                        V3 = verts[k]
-                        if line[V3[0], V3[1]] == 255:
-                            # V3 is in the line segment, therefore it is collinear
-                            line[V3[0]-3:V3[0]+3, V3[1]-3:V3[1]+3] = 150
-                            #self.showImg(line)
-                            verts.pop(k)
-                            next = True
-                            break
-                    if next:
-                        break
-                if next:
-                    break
-
-            if next:
-                continue
-            break # Will only leave the loop if it runs through all points and finds no collinear
-
-        print("Removed (" + str(originalVerts - len(verts)) + ") vertices")
-        #line = np.zeros_like(face)
-        #for V in verts:
-            #line[V3[0]:V3[0] + 3, V3[1]:V3[1] + 3] = 255
-        #self.showImg(line)
-        return verts
-
-    # erodes and dilates n times
-    def refineView(self, n):
-        k = np.ones((3, 3), np.float32)
-        for i in range(0, n):
-            self.cam.view = cv2.erode(self.cam.view, kernel=k)
-            self.cam.view = cv2.dilate(self.cam.view, kernel=k)
-
-        self.threshold(10, 255)
-
-    def threshold(self, min, max):
-        ret, self.cam.view = cv2.threshold(self.cam.view, min, max, 0)
-
     # shrinks image, less computations needed
     def getROI(self):
         self.cam.view = self.cam.view[200:1080 - 200, 300: 1920 - 300]
         self.resolution = (1920 - 600, 1080 - 400)
-
-
 
     #re-converts ROI coordinate point to 1920/1080 point coord
     def ROI_to_full(self, point):
         point[0] = point[0] + 300
         point[1] = point[1] + 200
         return point
-    # interface functions ==========================================
 
-    # moves camera in directions specified by fn name
+    # interface functions ==============================================================================================
+    # moves camera in directions specified by fn name, by amt (radians)
     def move_down(self, amt=0):
         i = 1
         if amt != 0:
@@ -834,6 +812,18 @@ class Robot:
         self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
         print("Radius set to " + str(r))
 
+    # translates camera in dir by amt (units)
+    def shift(self, dir, amt):
+        print("Shifting camera by " + str(amt) + " in dir " + str(dir))
+        offset = np.array(self.offset)
+        offset = offset + np.array(dir) * amt
+
+        self.offset[0] = offset[0]
+        self.offset[1] = offset[1]
+        self.offset[2] = offset[2]
+
+        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
+
     # orients the camera in spherical coordinates around the camera focus point (default is 0)
     def setCam(self, r, phi, theta):
         # position the camera
@@ -863,29 +853,15 @@ class Robot:
             f.write(self.cam.printParams())
             f.close()
 
-    # translates camera in dir by amt
-    def shift(self, dir, amt):
-        print("Shifting camera by " + str(amt) + " in dir " + str(dir))
-        offset = np.array(self.offset)
-        offset = offset + np.array(dir) * amt
-
-        self.offset[0] = offset[0]
-        self.offset[1] = offset[1]
-        self.offset[2] = offset[2]
-
-        self.setCam(self.cameraPos["r"], self.cameraPos["phi"], self.cameraPos["theta"])
-
     def toString(self):
         return "robot" + str(self.objNo) + "_" + str(self.pairNo)
 
 
-#  Unit Tests -------------------------------------------------
+#  Unit Tests ----------------------------------------------------------------------------------------------------------
 
 def TestCenterObject(robot):
     print(">>>> ROBOT "+str(robot.objNo)+"."+str(robot.pairNo) +" centerObject")
     robot.centerObject(debug=True)
-
-
 
 def TestVerticeCount(robot):
     print(">>>> Testing vertice counting")
@@ -895,7 +871,6 @@ def TestVerticeCount(robot):
     robot.enhanceView()
     robot.findVertices()
 
-
 def TestFindFaces(robot):
     print(">>>> Testing Find Faces")
     robot.move_right(0.2)
@@ -903,7 +878,6 @@ def TestFindFaces(robot):
     robot.loadImg("views/robot1_1_view8.png")
     verts, faces, img = robot.findFeatures()
     robot.showImg(img)
-
 
 def TestFindFeatures(robot):
     print(">>>> Testing feature correspondance")
@@ -973,7 +947,6 @@ def TestCamera2World(robot):
     p = robot.cam.world2cam(tp)
     print("Actual  ", np.round(p, 8))
     print("Expected", [1, 0, 0])
-
 
 def TestPointDepth(robot):
     realPts = [[0.5,   0.5, 0],
