@@ -506,7 +506,7 @@ class Robot:
         #tempImg = cv2.cvtColor(np.zeros_like(self.cam.view), cv2.COLOR_GRAY2RGB)
 
         # put get all high probability points
-        if not pts:
+        if len(pts) == 0:
             for x in range(0, len(verts)):
                 for y in range(0, len(verts[0])):
                     if verts[x, y] == 255:
@@ -697,7 +697,7 @@ class Robot:
                 p_world = self.cam.point2world(p_cam)
                 p_cam = np.round(p_cam, 8)
                 p_world = np.round(p_world, 8)
-                pts.append(p_cam)
+                pts.append(p_world)
         self.poly.addPoints(pts)
         return pts
         #self.poly.viewPoints()
@@ -926,11 +926,17 @@ def TestFindFeatures(robot):
     robot.set_radius(3.2)
     robot.calcViewFeatures('3.2')
 
-    clusters = robot.getClusters(pts=robot.poly.points, maxDist=0.03)
+    pts = (np.copy(robot.poly.points)).tolist()
+
+    clusters = robot.getClusters(pts=pts, maxDist=0.04)
     points3d = []
     for C in clusters:
         points3d.append(WLSQ_3D(C))
-    robot.poly.addPoints(pts=points3d, color=[1, 0, 0])
+
+    pcl = open3d.geometry.PointCloud()
+    pcl.points = open3d.utility.Vector3dVector(points3d)
+
+    open3d.visualization.draw_geometries([pcl])
 
 def TestCamera2World(robot):
 
@@ -1020,10 +1026,10 @@ if __name__ == "__main__":
 
 
 
-    TestCamera2World(robot2)
+    #TestCamera2World(robot2)
     #TestCenterObject(robot2)
     #TestPointDepth(robot2)
-    #TestFindFeatures(robot2)
+    TestFindFeatures(robot2)
     #TestFindFaces(robot2)
 
     # DONE, software will ding when done processing
