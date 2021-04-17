@@ -18,37 +18,46 @@ class DataLoader:
 
     # returns cv2 image array
     def getView(self, pairNo, objNo, params, isLightFixed='true', isRandomCam='false'):
+        noImage=True
+        while noImage:
+            try:
+                ws = create_connection("wss://polyhedral.eecs.yorku.ca/api/")
 
-        ws = create_connection("wss://polyhedral.eecs.yorku.ca/api/")
+                parameter = {
+                    'ID': self.objects[pairNo][objNo],
+                    'light_fixed': isLightFixed,
+                    'random_cam': isRandomCam,
+                    'cam_x': params["cam_x"],
+                    'cam_y': params["cam_y"],
+                    'cam_z': params["cam_z"],
+                    'cam_qw': params["cam_qw"],
+                    'cam_qx': params["cam_qx"],
+                    'cam_qy': params["cam_qy"],
+                    'cam_qz': params["cam_qz"]
+                }
 
-        parameter = {
-            'ID': self.objects[pairNo][objNo],
-            'light_fixed': isLightFixed,
-            'random_cam': isRandomCam,
-            'cam_x': params["cam_x"],
-            'cam_y': params["cam_y"],
-            'cam_z': params["cam_z"],
-            'cam_qw': params["cam_qw"],
-            'cam_qx': params["cam_qx"],
-            'cam_qy': params["cam_qy"],
-            'cam_qz': params["cam_qz"]
-        }
+                json_params = dumps(parameter, indent=2)
 
-        json_params = dumps(parameter, indent=2)
+                # send API request
+                ws.send(json_params)
 
-        # send API request
-        ws.send(json_params)
+                while True:
+                    x = ws.recv()
+                    if x == "":
+                        continue
+                    result = json.loads(x)
+                    print("Job Status: {0}".format(result['status']))
+                    if result['status'] == "SUCCESS":
+                        noImage = False
+                        break
+                    elif "FAILURE" in result['status'] or "INVALID" in result['status']:
+                        sys.exit()
+                ws.close()
 
-        while True:
-            result = json.loads(ws.recv())
-            print("Job Status: {0}".format(result['status']))
-            if result['status'] == "SUCCESS":
-                break
-            elif "FAILURE" in result['status'] or "INVALID" in result['status']:
-                sys.exit()
+            except ConnectionResetError:
+                print("CONNECTION ERROR")
 
         # process result
-
         image_base64 = result['image']
         image_decoded = base64.b64decode(str(image_base64))
 
@@ -57,6 +66,6 @@ class DataLoader:
         image = Image.open(io.BytesIO(image_decoded))
         cv_image = cv2.cvtColor(np.array(image), cv2.COLOR_BGR2GRAY)
 
-        ws.close()
+
 
         return cv_image
