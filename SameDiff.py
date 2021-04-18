@@ -27,6 +27,8 @@ def normalize(a):
     for x in a:
         n += x ** 2
     N = np.sqrt(n)
+    if N == 0:
+        return (0,0,0)
     return a / N
 
 def vecMag(a):
@@ -450,7 +452,6 @@ class Robot:
     def processCameraView(self, debug=False):
 
         path = "views/robot" + str(self.objNo) + "_" + str(self.pairNo) + "_view" + str(self.viewCount) + ".png"
-
         viewExists = os.path.exists(path)
         print("View Exists: " + str(viewExists))
         if (not debug) or (not viewExists):
@@ -668,14 +669,15 @@ class Robot:
 
         faces = self.findFaces()
         vertices = []
+        removeFaces = []
         # find vertices on the face level
         for i in range(0, len(faces)):
             print("Determining vertices in face " + str(i))
             face = faces[i]
             tmp = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
-            dilations = -1
+            dilations = 0
             numClusters = 0
-            while numClusters < 3: # Can't have a face with < 3 points
+            while numClusters < 3 and dilations < 5: # Can't have a face with < 3 points
                 dilations += 1
                 verts = self.detectCorners(face, dilations)
                 # now process results from harris, find most likely vertices
@@ -683,10 +685,23 @@ class Robot:
                 #newVerts = self.calcVertices(clusters)
                 newVerts = self.removeColinearVertices(verts, face)
                 numClusters = len(newVerts)
+                print("Clusters in face " + str(numClusters))
+
+            if dilations >= 5:
+                print("Cannot make use of face, dilated too many times")
+                removeFaces.append(i)
+                continue
+
             for V in newVerts:
                 cv2.circle(tmp, (V[1], V[0]), 5, (255 - i*50, 255 - i*50, i*50), 2)
             #showImg(tmp)
             vertices.extend(newVerts)
+        newFaces = []
+        for i in range(0, len(faces)):
+            if i not in removeFaces:
+                newFaces.append(faces[i])
+        faces = newFaces
+
         # now do vertices globally to reduce redundancy
         clusters = self.getClusters_global(vertices)
         vertices = self.calcVertices(clusters)
@@ -704,9 +719,9 @@ class Robot:
         img = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
         #showImg(face)
         k = np.ones((5,5))
-        face = cv2.erode(face, k, 2)
+        face = cv2.erode(face, k, dilations)
         #showImg(face)
-        face = cv2.dilate(face, k, 3)
+        face = cv2.dilate(face, k, dilations + 1)
         contours, hierarchy = cv2.findContours(face, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(img, contours, -1, (0, 255, 0), 3)
         #showImg(img)
@@ -718,29 +733,28 @@ class Robot:
         cntArea = 0
         maxLoops = 5
         loops = 1
-        while (not (realArea*0.95 <= cntArea <= realArea*1.05)) and (loops <= maxLoops):
+        while (not (realArea*0.90 <= cntArea <= realArea*1.05)) and (loops <= maxLoops):
             loops += 1
-            print("    > ("+str(loops)+")Collecting corners in contour... b=" + str(beta))
+            print("    > ("+str(loops-1)+")Collecting corners in contour... b=" + str(beta))
             corners = []
-            for C in contours:
+            C = contours[0]
+            cv2.drawContours(img, [C], -1, ((N-1)*50, 0, 255//N), 3)
+            N += 1
+            peri = cv2.arcLength(C, True)
+            approx = cv2.approxPolyDP(C, beta*peri, True)
+            for p in approx:
+                pt = p[0]
+                corners.append([pt[1], pt[0]])
 
-                cv2.drawContours(img, [C], -1, ((N-1)*50, 0, 255//N), 3)
-                N += 1
-                peri = cv2.arcLength(C, True)
-                approx = cv2.approxPolyDP(C, beta*peri, True)
-                for p in approx:
-                    pt = p[0]
-                    corners.append([pt[1], pt[0]])
+            approxContour = np.array(approx)
+            cntArea = cv2.contourArea(approxContour)
 
-                approxContour = np.array(approx)
-                cntArea = cv2.contourArea(approxContour)
-            #showImg(img)
             beta -= 0.01
             print("          cntArea:          " + str(cntArea))
             print("         realArea:          " + str(realArea))
             print("         Potential Corners: "+str(len(approx)))
             print("        Is poly good appr?: "+str((realArea*0.9 <= cntArea <= realArea*1.05)))
-
+        #showImg(img)
         return corners
 
 
@@ -869,30 +883,33 @@ class Robot:
         print(" > Collecting colour histogram")
         numBuckets = 10
         bucketSize = 26
-        colors = cv2.calcHist([self.cam.view], [0], None, [numBuckets], [0, 256])
-        #print(colors)
+        colors, bins = np.histogram(self.cam.view.ravel(), 15, [0, 256])#cv2.calcHist([self.cam.view], [0], None, [numBuckets], [0, 256])
+        print(colors)
         colors[0] = 0  # we don't care about black background
         faceColors = []
-        for i in range(0, numBuckets):
+        last = 0
+        for i in range(0, 15):
             C = colors[i]
             # if there are more than 1000 occurrences in that bucket, its probably a face
             if C >= 1500: # CHANGE BACK TO 1000 AFTER DONE DEBUGGING
-                faceColors.append([i * bucketSize, (i + 1) * bucketSize])
+                if last == 0:
+                    last = int(bins[i])
+                faceColors.append([bins[i], bins[i+1]])
+                last = bins[i+1]
 
         print(" > Found " + str(len(faceColors)) + " faces")
         # now lets identify faces
         print(" > Generating masks")
         faces = []
         for fc in faceColors:
+            #print(fc)
             face = np.zeros_like(self.cam.view)
-            # loop through view
-            for x in range(0, len(self.cam.view)):
-                for y in range(0, len(self.cam.view[0])):
-                    if fc[0] <= self.cam.view[x, y] < fc[1]:
-                        face[x, y] = 255
+            face = np.where(np.logical_and(self.cam.view < fc[1], self.cam.view >= fc[0]), 255, 0)
+            face = face.astype(np.uint8)
             face = cv2.medianBlur(face, 5)
             faces.append(face)
             #showImg(face)
+
 
         print("Faces localized, masks generated")
         return faces
@@ -1002,6 +1019,62 @@ class Robot:
         print("Calculating 3D poistions for detected points")
         pts = []
         print("SAME NUMBER OF FACES???? :" + str(len(faces1) == len(faces2)))
+
+
+        #we probably picked up a bit of another face, so just get rid of the smallest face
+        if not len(faces1) == len(faces2):
+            print("  Adjusting faces")
+            differences = []
+            while len(faces1) != len(faces2):
+                if len(faces2) > len(faces1):
+                    for i in range(0, len(faces1)):
+                        differences.append([])
+                        area_i = cv2.countNonZero(faces1[i])
+                        for j in range(0, len(faces2)):
+                            area_j = cv2.countNonZero(faces2[j])
+                            differences[i].append((np.abs(area_i - area_j)))
+
+                    good_j = []
+                    for i in range(0, len(faces1)):
+                        best_j = 0
+                        best = differences[i][0]
+                        for j in range(1, len(faces2)):
+                            if differences[i][j] < best:
+                                best_j = j
+                                best = differences[i][j]
+                        good_j.append(best_j)
+
+                    inters = list(set(good_j) & set(range(0, len(faces2))))
+                    for j in range(0, len(faces2)):
+                        if j not in inters:
+                            faces2.pop(j)
+
+                if len(faces2) < len(faces1):
+                    for i in range(0, len(faces2)):
+                        differences.append([])
+                        area_i = cv2.countNonZero(faces2[i])
+                        for j in range(0, len(faces1)):
+                            area_j = cv2.countNonZero(faces1[j])
+                            differences[i].append((np.abs(area_i - area_j)))
+
+                    good_j = []
+                    for i in range(0, len(faces2)):
+                        best_j = 0
+                        best = differences[i][0]
+                        for j in range(1, len(faces1)):
+                            if differences[i][j] < best:
+                                best_j = j
+                                best = differences[i][j]
+                        good_j.append(best_j)
+
+                    inters = list(set(good_j) & set(range(0, len(faces1))))
+                    for j in range(0, len(faces1)):
+                        if j not in inters:
+                            faces1.pop(j)
+
+
+
+
         faceCorrelatedVerts = []
         for i in range(0, len(faces1)):
             p = self.correlateVertsWithFace(vertPairs[:, 0], faces1[i])
@@ -1015,6 +1088,8 @@ class Robot:
         faceCorrelatedPoints3D = []
         print(faceCorrelatedVerts)
         print(faceCorrelatedVerts_2)
+
+
 
         #ensure they are same length
         for i in range(0, len(faces1)):
@@ -1082,17 +1157,19 @@ class Robot:
         return foundIndex
 
     def getOptimalRadius(self):
+        print("Determining Optimal Radius...")
         img = self.cam.view
         ret, img = cv2.threshold(img, 127, 255, 0)
         area = cv2.countNonZero(img)
         totalArea = self.resolution[0]*self.resolution[1]
         coverage = round(float(area/totalArea), 8)
-        if coverage < 0.25:
+        print("coverage:", coverage)
+        if coverage < 0.01:
             return 1.5
-        elif coverage <0.5:
+        elif coverage <0.015:
             return 2.5
         else:
-            return 3
+            return 3.5
 
     # This function calculated the 3D positions of vertices from the current orientation at 5 different radii
     # It then aggregates these values and calculates the best guess
@@ -1398,6 +1475,88 @@ def TuneFocus(robot):
     robot.set_radius(4)
 
 
+def TestCongruency():
+    RESULTS = []
+    for i in range(30, 48, 2):
+        img1 = cv2.imread("views/robot0_1_view" + str(i) + ".png", 0)
+        img2 = cv2.imread("views/robot1_1_view" + str(i) + ".png", 0)
+        ret, img1 = cv2.threshold(img1, 127, 255, 0)
+        ret, img2 = cv2.threshold(img2, 127, 255, 0)
+
+        if cv2.countNonZero(img1) == 0:
+            print("Dont see anything for face 1")
+            continue
+        if cv2.countNonZero(img2) == 0:
+            print("Dont see anything for face 2")
+            continue
+
+        res = compareImages(img1, img2)
+        res.append(['Views', i, i])
+        RESULTS.append(res)
+    writeToCSV(1, RESULTS)
+
+    RESULTS = []
+    for i in range(18, 27):
+        img1 = cv2.imread("views/robot0_2_view" + str(i) + ".png", 0)
+        img2 = cv2.imread("views/robot1_2_view" + str(i) + ".png", 0)
+        ret, img1 = cv2.threshold(img1, 127, 255, 0)
+        ret, img2 = cv2.threshold(img2, 127, 255, 0)
+
+        res = compareImages(img1, img2)
+        res.append(['Views', i, i])
+        RESULTS.append(res)
+    writeToCSV(2, RESULTS)
+
+    RESULTS = []
+    for i in range(18, 28):
+        img1 = cv2.imread("views/robot0_3_view" + str(i) + ".png", 0)
+        img2 = cv2.imread("views/robot1_3_view" + str(i) + ".png", 0)
+        ret, img1 = cv2.threshold(img1, 127, 255, 0)
+        ret, img2 = cv2.threshold(img2, 127, 255, 0)
+
+        res = compareImages(img1, img2)
+        res.append(['Views', i, i])
+        RESULTS.append(res)
+    writeToCSV(3, RESULTS)
+
+    RESULTS = []
+    for i in range(18, 21):
+        img1 = cv2.imread("views/robot0_4_view" + str(i) + ".png", 0)
+        img2 = cv2.imread("views/robot1_4_view" + str(i) + ".png", 0)
+        ret, img1 = cv2.threshold(img1, 127, 255, 0)
+        ret, img2 = cv2.threshold(img2, 127, 255, 0)
+
+        res = compareImages(img1, img2)
+        res.append(['Views', i, i])
+        RESULTS.append(res)
+    writeToCSV(4, RESULTS)
+
+    RESULTS = []
+    for i in range(18, 28):
+        img1 = cv2.imread("views/robot0_5_view" + str(i) + ".png", 0)
+        img2 = cv2.imread("views/robot1_5_view" + str(i) + ".png", 0)
+        ret, img1 = cv2.threshold(img1, 127, 255, 0)
+        ret, img2 = cv2.threshold(img2, 127, 255, 0)
+
+        res = compareImages(img1, img2)
+        res.append(['Views', i, i])
+        RESULTS.append(res)
+    writeToCSV(5, RESULTS)
+
+    RESULTS = []
+    for i in range(18, 21):
+        img1 = cv2.imread("views/robot0_6_view" + str(i) + ".png", 0)
+        img2 = cv2.imread("views/robot1_6_view" + str(i) + ".png", 0)
+        ret, img1 = cv2.threshold(img1, 127, 255, 0)
+        ret, img2 = cv2.threshold(img2, 127, 255, 0)
+
+        res = compareImages(img1, img2)
+        res.append(['Views', i, i])
+        RESULTS.append(res)
+    writeToCSV(6, RESULTS)
+
+
+
 # Actual Algorithm ---------------------------------------------
 
 def TestFindFeatures(robot, dbg=False, init=0):
@@ -1434,49 +1593,74 @@ def comparePolygons(robot1, robot2, dbg=False):
 
     comparison = poly1.comparePoly(poly2)
 
-
+    RESULTS = []
     #lets try to find similar views
+
+    print("Looking for possible same views in faces1(" + str(len(poly1.faces)) +"), faces2("+str(len(poly2.faces))+")")
+
     for face1 in poly1.faces:
         for face2 in poly2.faces:
-            if face2.area * 0.8 <= face1.area <= face2.area * 1.2:  # if the areas are pretty close
-                print("Thats right!")
+            if face2.area * 0.9 <= face1.area <= face2.area * 1.1:  # if the areas are pretty close
+                print("I found two possible similar faces")
                 norm1 = face1.normal
                 norm2 = face2.normal
                 COM1 = face1.COM
                 COM2 = face2.COM
 
-                X = robot1.findIntersectWithSphere(COM1, norm1, robot1.cameraPos['r'])
+                X = robot1.findIntersectWithSphere(COM1, norm1, 4)
+                if X.any() == -1:
+                    break
                 robot1.move_to(X)
-                X = robot2.findIntersectWithSphere(COM2, norm2, robot2.cameraPos['r'])
+                X = robot2.findIntersectWithSphere(COM2, norm2, 4)
+                if X.any() == -1:
+                    continue
                 robot2.move_to(X)
 
-                robot1.processCameraView(debug=dbg)
+                #robot1.processCameraView(debug=dbg)
                 r = robot1.getOptimalRadius()
                 robot1.set_radius(r)
+                print("Getting a look at face 1")
                 robot1.processCameraView(debug=dbg)
                 robot1.getROI()
 
-                robot2.processCameraView(debug=dbg)
+                #robot2.processCameraView(debug=dbg)
                 r = robot2.getOptimalRadius()
                 robot2.set_radius(r)
+                print("Getting a look at face 2")
                 robot2.processCameraView(debug=dbg)
                 robot2.getROI()
 
-                result = compareImages(robot1.cam.view, robot2.cam.view)
-                result.extend([['Area Ratio', (face1.area/face2.area)]])
+                ret, img1 = cv2.threshold(robot1.cam.view, 127, 255, 0)
+                ret, img2 = cv2.threshold(robot2.cam.view, 127, 255, 0)
+
+                if cv2.countNonZero(img1) == 0:
+                    print("Dont see anything for face 1")
+                    break
+                if cv2.countNonZero(img2) == 0:
+                    print("Dont see anything for face 2")
+                    continue
+
+                result = compareImages(img1, img2)
+                result.append(['Views', robot1.viewCount, robot2.viewCount])
+                RESULTS.append(result)
                 print(result)
             else:
                 print("Not right!")
-    return comparison
+    #print(RESULTS)
+    return RESULTS
 
 def compareImages(img1, img2):
     IMG = np.concatenate((img1, img2), axis=1)
     #showImg(IMG)
 
-    ret, thresh1 = cv2.threshold(img1, 127, 255, 0)
-    ret, thresh2 = cv2.threshold(img2, 127, 255, 0)
+    width = int(img1.shape[1] * 0.3)
+    height = int(img1.shape[0] * 0.3)
+    dim = (width, height)
 
-    views = [thresh1, thresh2]
+    img1 = cv2.resize(img1, dim, interpolation=cv2.INTER_AREA)
+    img2 = cv2.resize(img2, dim, interpolation=cv2.INTER_AREA)
+
+    views = [img1, img2]
     polygons = []
     perims = []
 
@@ -1514,6 +1698,8 @@ def compareImages(img1, img2):
         #showImg(img)
         polygons.append(corners)
         perims.append(peri)
+
+
     COMS = []
     for i in range(0,2):
         COM = np.array([0, 0])
@@ -1529,7 +1715,57 @@ def compareImages(img1, img2):
         for j in range(0, len(polygons[i])):
             polygons[i][j] -= COMS[i]
 
-    #lets find the largest distance so we can normalize:
+        # lets find the largest distance so we can normalize:
+
+    poly1, best1 = getCongruency(polygons.copy(), COMS, img1, 0) #Different starting points
+    poly2, best2 = getCongruency(polygons.copy(), COMS, img1, pi/2)
+    poly3, best3 = getCongruency(polygons.copy(), COMS, img1, pi)
+    poly4, best4 = getCongruency(polygons.copy(), COMS, img1, 3*pi/2)
+    #print([best1, best2, best3, best4])
+    bests = np.round([best1, best2, best3, best4], 8)
+    Best = 99999
+    smol = np.min(np.round(bests, 8))
+    if smol == bests[0]:
+        polygons = poly1
+        Best = best1
+    elif smol == bests[1]:
+        polygons = poly2
+        Best = best2
+    elif smol == bests[2]:
+        polygons = poly3
+        Best = best3
+    elif smol == bests[3]:
+        polygons = poly4
+        Best = best4
+
+    #print("Best Congruency: " + str(Best))
+
+    for i in range(0,2):
+        for j in range(0, len(polygons[i])):
+            polygons[i][j] += COMS[0]
+            polygons[i][j] = polygons[i][j].astype(int)
+            polygons[i][j] = polygons[i][j][::-1]
+    face = np.zeros_like(img1)
+    img = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
+
+    for i in range(0,2):
+        for p in polygons[i]:
+            cv2.circle(img, (int(COMS[0][1]), int(COMS[0][0])), 4, (0, 255, 0), 4)
+
+    face = np.zeros_like(img1)
+    imgA = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
+    imgB = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
+    cv2.fillPoly(imgA, [np.array(polygons[0]).astype(int)], (0, 0, 255))
+    cv2.fillPoly(imgB, [np.array(polygons[1]).astype(int)], (255, 0, 0))
+    img = imgA + imgB
+    #showImg(img)
+
+    return [['Perimiter Ratio', perims[0]/perims[1]], ['Best Congruency', Best]]
+
+def getCongruency(polygons, COMS, img1, start):
+
+    bestPoly = []
+
     maxDist = 0
     for x in range(0, len(polygons[0])):
         for y in range(0, len(polygons[0])):
@@ -1540,58 +1776,103 @@ def compareImages(img1, img2):
                 if d > maxDist:
                     maxDist = d
 
-    #print(polygons)
-    #now both are centered at (0,0)
+    maxDist2 = 0
+    for x in range(0, len(polygons[1])):
+        for y in range(0, len(polygons[1])):
+            if x != y:
+                p1 = polygons[1][x]
+                p2 = polygons[1][y]
+                d = dist_2d(p1, p2)
+                if d > maxDist2:
+                    maxDist2 = d
+    for i in range(0, len(polygons[1])):
+        polygons[1][i] *= maxDist/maxDist2 #scale them similarily
+
+    # print(polygons)
+    # now both are centered at (0,0)
     congruency = 9999999
     Best = 999999
-    T = 0
-    step = pi/2
-    for i in range(0, 25):
+    T = start
+    step = pi/6
+    for i in range(0, 20):
         ROT = [[cos(T), -sin(T)],
                [sin(T), cos(T)]]
         for k in range(0, len(polygons[1])):
             b = np.array(polygons[1][k])
-            polygons[1][k] = np.matmul(ROT, b) #Rotate all points
+            polygons[1][k] = np.matmul(ROT, b)  # Rotate all points
 
-        #Calculate congruency
+        ##################### View Rotation in process #############################
+        for i in range(0, 2):
+            for j in range(0, len(polygons[i])):
+                polygons[i][j] += COMS[0]
+                polygons[i][j] = polygons[i][j][::-1]
+
+        face = np.zeros_like(img1)
+        imgA = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
+        imgB = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
+        cv2.fillPoly(imgA, [np.array(polygons[0]).astype(int)], (0, 0, 255))
+        cv2.fillPoly(imgB, [np.array(polygons[1]).astype(int)], (255, 0, 0))
+        img = imgA + imgB
+
+        for i in range(0, 2):
+            for j in range(0, len(polygons[i])):
+                polygons[i][j] = polygons[i][j][::-1]
+                polygons[i][j] -= COMS[0]
+        # print("Congruency: " + str(congruency)+", step:" + str(step))
+        #showImg(img)
+
+        red = np.sum(np.where((img == (0,0,255)).all(axis=2)))
+        blue = np.sum(np.where((img == (255,0,0)).all(axis=2)))
+        purple = np.sum(np.where((img == (255,0,255)).all(axis=2)))
+        areaRatio = (red + blue)/(red + blue + purple)
+
+
+        ###########################################################################
+
+        alpha = 0.05 #area penalty coefficient
+        # Calculate congruency
         newCongruency = 0
         for p1 in polygons[0]:
             shortest = 99999
             for p2 in polygons[1]:
                 if dist_2d(p1, p2) < shortest:
                     shortest = dist_2d(p1, p2)
-            newCongruency += shortest
+            newCongruency += shortest ** 2
 
-        newCongruency /= maxDist
-        newCongruency /= len(polygons[0]) #Normalize for max dist and number of points
+        newCongruency /= maxDist ** 2
+        newCongruency /= len(polygons[0]) # Normalize for max dist and number of points
+        #print("pentalty", (areaRatio*alpha))
+        #print("congruency", newCongruency)
+        newCongruency += areaRatio*alpha #penalty term, gets smaller as overlap is better
+        newCongruency /= 2
 
-        if newCongruency - congruency > 0: #i.e. we got worse
-            step = -step/2
+
+        #newCongruency /= 2
+        if newCongruency - congruency > 0:  # i.e. we got worse
+            step = -step*0.95
+        else:
+            step = 0.8*step
         T = step
         congruency = newCongruency
         if congruency < Best:
             Best = congruency
-        #print(congruency)
+            bestPoly = polygons
 
-    for i in range(0,2):
-        for j in range(0, len(polygons[i])):
-            polygons[i][j] += COMS[0]
-            polygons[i][j] = polygons[i][j].astype(int)
-    face = np.zeros_like(img1)
-    img = cv2.cvtColor(face, cv2.COLOR_GRAY2RGB)
-
-    for i in range(0,2):
-        for p in polygons[i]:
-            #print("p", p)
-            cv2.circle(img, (int(p[1]), int(p[0])), 4, (255*i, 0, 255), -1)
-    showImg(img)
-
-    return [['Perimiter Ratio', perims[0]/perims[1]], ['Best Congruency', Best]]
-
-
+    return bestPoly, Best
 
 def decideSameDiff(comparison):
     pass
+
+
+
+def writeToCSV(pair, results):
+
+    with open('Analysis/Results.csv', mode='a') as csv:
+        for row in results:
+            print("saving " + str(row))
+            line = str(pair) + "," + str(row[2][1]) + '-' + str(row[2][2]) + "," + str(row[0][1]) + "," + str(row[1][1]) + "\n"
+            csv.write(line)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -1606,26 +1887,25 @@ if __name__ == "__main__":
 
     NumPairs = len(DL.objects)
 
+    #TestCongruency()
+
     Results = []
-    views = ['19', '25', '23', '21', '29']
-    for v in views:
-        img1 = cv2.imread("views/robot0_3_view"+v+".png", 0)
-        img2 = cv2.imread("views/robot1_3_view28.png", 0)
-        print(compareImages(img1, img2))
-    for i in range(3, 4):
+    #views = ['19', '25', '23', '21', '29']
+    #for v in views:
+        #img1 = cv2.imread("views/robot0_3_view"+v+".png", 0)
+        #img2 = cv2.imread("views/robot1_3_view28.png", 0)
+        #print(compareImages(img1, img2))
+    for i in range(1, 10):
         Robot1 = Robot(DL, i, 0, debug=False)
         Robot2 = Robot(DL, i, 1, debug=False)
 
         faces1 = TestFindFeatures(Robot1, True, init=1.0903376996637926)
         faces2 = TestFindFeatures(Robot2, True, init=1.1596437800060373)
 
-
-
-        print("FACES 1: " + str(faces1))
-        print("FACES 2: " + str(faces2))
-        print("SAME?: " + str(faces1==faces2))
-        Results.append([["Faces1", faces1], ["Faces2", faces2]])
-        Results.extend(comparePolygons(Robot1, Robot2, True))
+        print("Same # Faces?: " + str(faces1==faces2))
+        res = comparePolygons(Robot1, Robot2, True)
+        writeToCSV(i, res)
+        Results.append(res)
 
 
 
@@ -1642,8 +1922,11 @@ if __name__ == "__main__":
     print("I HAVE FINISHED, THANK YOU HAVE A NICE DAY")
     playsound("Toaster Oven Ding - Sound Effect.mp3")
 
-    for r in Results:
-        print(r)
+    for i in range(0, len(Results)):
+        print("For pair " + str(i+1))
+        for r in Results[i]:
+            print(r)
+        print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>")
 
     #robot2.poly.viewPoints()
 
