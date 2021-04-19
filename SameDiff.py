@@ -149,6 +149,7 @@ def showImg(img):
 
 #flattens 3D points and returns an image
 def imageFrom3D(pts):
+    pass
     pts = np.array(pts)
     pts[:,2] = 0 #remove z values
     minx = np.min(pts[:,0])
@@ -291,6 +292,7 @@ class Polyhedron:
         self.colors = []
         self.faces = []  # list of groups of points which make up faces
         self.pointCloud = open3d.geometry.PointCloud()
+        self.boundingVolume = 0
 
     def addFace(self, fcs):
         newFaces = []
@@ -386,6 +388,34 @@ class Polyhedron:
                     SL.append(M)
         SL.sort()
         return SL
+
+    def calcBoundingVolume(self):
+        minxyz = [9999,9999, 9999]
+        maxxyz = [-9999, -9999, -9999]
+        for p in self.points:
+            x = p[0]
+            y = p[1]
+            z = p[2]
+            if x > maxxyz[0]:
+                maxxyz[0] = x
+            elif x < minxyz[0]:
+                minxyz[0] = x
+
+            if y > maxxyz[1]:
+                maxxyz[1] = y
+            elif y < minxyz[1]:
+                minxyz[1] = y
+
+            if z > maxxyz[2]:
+                maxxyz[2] = z
+            elif z < minxyz[2]:
+                minxyz[2] = z
+
+            L = np.abs(maxxyz[0] - minxyz[0])
+            W = np.abs(maxxyz[1] - minxyz[1])
+            H = np.abs(maxxyz[2] - minxyz[2])
+
+            self.boundingVolume = L*W*H
 
     def addPoints(self, pts, color=[1, 0, 0]):
         self.points.extend(pts)
@@ -1109,7 +1139,7 @@ class Robot:
                 cv2.imwrite("views/" + self.toString() + "_view" + str(self.viewCount) + "_corr" + str(i) + ".png",
                             img=temp)
                 # invert the arrays
-                p_cam, zdist = self.calculate_pos(V1[::-1], V2[::-1], b, reso=(1920 - 600, 1080 - 400),
+                p_cam, zdist = self.calculate_pos(V1[::-1], V2[::-1], b, self.resolution,
                                                   debug=False)  # in camera coordinates
                 # ignore point if too far away to be accurate
                 p_cam = np.round(p_cam, 8)
@@ -1168,8 +1198,10 @@ class Robot:
             return 1.5
         elif coverage <0.015:
             return 2.5
+        elif coverage < 0.05:
+            return 3
         else:
-            return 3.5
+            return 4
 
     # This function calculated the 3D positions of vertices from the current orientation at 5 different radii
     # It then aggregates these values and calculates the best guess
@@ -1180,20 +1212,10 @@ class Robot:
         ps, vertPairs, FACES, FCP = self.calcViewFeatures('2.6', debug=debug)
         pts.extend(ps)
 
-        imageFrom3D(pts)
 
         color = np.array([1,1,1])
 
-        self.poly.drawLine([[0,0,0],[1,0,0]], [1,0,0])
-        self.poly.drawLine([[0,0,0],[0,1,0]], [0,1,0])
-        self.poly.drawLine([[0,0,0],[0,0,1]], [0,0,1])
 
-        i = 0
-        for fp in FCP:
-            i += 1
-            print(fp)
-            self.poly.drawLine(fp, color/i)
-            #self.poly.addPoints(fp, color)
         self.poly.addFace(FCP)
 
     # <input> : verts = [v1, ...] vi = (x,y) in pixel coordinates
@@ -1234,7 +1256,11 @@ class Robot:
     # shrinks image, less computations needed
     def getROI(self):
         self.cam.view = self.cam.view[100:1080 - 100, 400: 1920 - 400]
-        self.resolution = (1920 - 800, 1080 - 200)
+        width = int(self.cam.view.shape[1] * 0.7)
+        height = int(self.cam.view.shape[0] * 0.7)
+        dim = (width, height)
+        self.cam.view = cv2.resize(self.cam.view, dim, interpolation=cv2.INTER_AREA)
+        self.resolution = (self.cam.view.shape[1], self.cam.view.shape[0])
 
     #re-converts ROI coordinate point to 1920/1080 point coord
     def ROI_to_full(self, point):
@@ -1336,7 +1362,7 @@ class Robot:
 
         if dscrm < 0:
             print("SPHERE INTERSECTION: NONE EXIST")
-            return -1
+            return None
         if dscrm == 0: # one solution
             d = -b/2
         else: #two solutions
@@ -1562,7 +1588,7 @@ def TestCongruency():
 def TestFindFeatures(robot, dbg=False, init=0):
     print(">>>> Testing feature correspondance " + robot.toString())
 
-    init = 0#np.random.random()*2*pi - 0.1
+
     robot.move_right(amt=init) #Random starting point so we can retry if theres a fucky wucky
 
     robot.estimateTrueViewFeatures(debug=dbg)
@@ -1578,7 +1604,7 @@ def TestFindFeatures(robot, dbg=False, init=0):
     robot.estimateTrueViewFeatures(debug=dbg)
 
     #robot.poly.viewPoints()
-
+    robot.poly.calcBoundingVolume()
     print("Faces: " + str(robot.poly.numFaces()))
     robot.poly.pruneFaces()
     print("Faces: " + str(robot.poly.numFaces()))
@@ -1608,11 +1634,11 @@ def comparePolygons(robot1, robot2, dbg=False):
                 COM2 = face2.COM
 
                 X = robot1.findIntersectWithSphere(COM1, norm1, 4)
-                if X.any() == -1:
+                if X is None:
                     break
                 robot1.move_to(X)
                 X = robot2.findIntersectWithSphere(COM2, norm2, 4)
-                if X.any() == -1:
+                if X is None:
                     continue
                 robot2.move_to(X)
 
@@ -1642,6 +1668,7 @@ def comparePolygons(robot1, robot2, dbg=False):
 
                 result = compareImages(img1, img2)
                 result.append(['Views', robot1.viewCount, robot2.viewCount])
+                result.append(['BoundingVolumes', robot1.poly.boundingVolume, robot2.poly.boundingVolume])
                 RESULTS.append(result)
                 print(result)
             else:
@@ -1759,8 +1786,10 @@ def compareImages(img1, img2):
     cv2.fillPoly(imgB, [np.array(polygons[1]).astype(int)], (255, 0, 0))
     img = imgA + imgB
     #showImg(img)
+    mn = np.min(perims)
+    mx = np.max(perims)
 
-    return [['Perimiter Ratio', perims[0]/perims[1]], ['Best Congruency', Best]]
+    return [['Perimiter Ratio', mn/mx], ['Best Congruency', Best]]
 
 def getCongruency(polygons, COMS, img1, start):
 
@@ -1785,8 +1814,8 @@ def getCongruency(polygons, COMS, img1, start):
                 d = dist_2d(p1, p2)
                 if d > maxDist2:
                     maxDist2 = d
-    for i in range(0, len(polygons[1])):
-        polygons[1][i] *= maxDist/maxDist2 #scale them similarily
+    #for i in range(0, len(polygons[1])):
+        #polygons[1][i] *= maxDist/maxDist2 #scale them similarily
 
     # print(polygons)
     # now both are centered at (0,0)
@@ -1829,22 +1858,21 @@ def getCongruency(polygons, COMS, img1, start):
 
         ###########################################################################
 
-        alpha = 0.05 #area penalty coefficient
+        alpha = 0.8 #area penalty coefficient
+        beta = 0.8
         # Calculate congruency
-        newCongruency = 0
+        pointDists = 0
         for p1 in polygons[0]:
             shortest = 99999
             for p2 in polygons[1]:
                 if dist_2d(p1, p2) < shortest:
                     shortest = dist_2d(p1, p2)
-            newCongruency += shortest ** 2
+            pointDists += shortest ** 2
 
-        newCongruency /= maxDist ** 2
-        newCongruency /= len(polygons[0]) # Normalize for max dist and number of points
+        newCongruency = alpha*areaRatio + beta*pointDists/(maxDist ** 2)
+
         #print("pentalty", (areaRatio*alpha))
-        #print("congruency", newCongruency)
-        newCongruency += areaRatio*alpha #penalty term, gets smaller as overlap is better
-        newCongruency /= 2
+        #print("congruency", newCongruency)\
 
 
         #newCongruency /= 2
@@ -1857,20 +1885,19 @@ def getCongruency(polygons, COMS, img1, start):
         if congruency < Best:
             Best = congruency
             bestPoly = polygons
-
+    print("area", (alpha * areaRatio))
+    print("point", beta * pointDists / (maxDist ** 2))
     return bestPoly, Best
 
 def decideSameDiff(comparison):
     pass
-
-
 
 def writeToCSV(pair, results):
 
     with open('Analysis/Results.csv', mode='a') as csv:
         for row in results:
             print("saving " + str(row))
-            line = str(pair) + "," + str(row[2][1]) + '-' + str(row[2][2]) + "," + str(row[0][1]) + "," + str(row[1][1]) + "\n"
+            line = str(pair) + "," + str(row[2][1]) + '-' + str(row[2][2]) + "," + str(row[0][1]) + "," + str(row[1][1]) +','+str(row[3][1])+','+str(row[3][2])+ "\n"
             csv.write(line)
 
 
